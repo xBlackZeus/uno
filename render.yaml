@@ -1,0 +1,24 @@
+# Free hosting for the game server (Render).
+#
+# GitHub Pages can only serve static files, so the WebSocket server that holds
+# the live game runs here. The browser client is deployed separately to Pages.
+#
+# 1. Push this repo to GitHub.
+# 2. In Render: New -> Blueprint -> point at this repository. It reads this file.
+# 3. Copy the resulting https://<your-service>.onrender.com into the repository
+#    secret UNO_SERVER_URL so the Pages build points the client at it.
+#
+# The free plan sleeps after inactivity, so the first request after a quiet spell
+# can take ~30s while the service wakes up.
+
+services:
+  - type: web
+    name: uno-server
+    runtime: node
+    plan: free
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
