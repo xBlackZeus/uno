@@ -13,54 +13,65 @@
     game: $('#game'),
     name: $('#nameInput'),
     code: $('#codeInput'),
+    joinForm: $('#joinForm'),
+    playerCount: $('#playerCount'),
     codeEntry: $('#codeEntry'),
     homeError: $('#homeError'),
-    joinForm: $('#joinForm'),
     roomCode: $('#roomCode'),
+    waitingSub: $('#waitingSub'),
+    seatList: $('#seatList'),
     shareLink: $('#shareLink'),
-    waitingStatus: $('#waitingStatus'),
     scores: $('#scores'),
     roundChip: $('#roundChip'),
     codeChip: $('#codeChip'),
-    opponent: $('#opponent'),
+    table: $('#table'),
+    opponents: $('#opponents'),
     drawPile: $('#drawPile'),
-    drawPileArt: $('#drawPileArt'),
     drawCount: $('#drawCount'),
+    drawPileArt: $('#drawPileArt'),
     topCard: $('#topCard'),
     turnBanner: $('#turnBanner'),
     logStrip: $('#logStrip'),
     hand: $('#hand'),
     actions: $('#actions'),
-    colorPicker: $('#colorPicker'),
-    colorGrid: $('#colorGrid'),
-    roundBanner: $('#roundBanner'),
-    roundTitle: $('#roundTitle'),
-    roundBody: $('#roundBody'),
-    tally: $('#tally'),
-    nextRoundBtn: $('#nextRoundBtn'),
-    linkBanner: $('#linkBanner'),
+    chatPanel: $('#chatPanel'),
+    chatLog: $('#chatLog'),
+    chatForm: $('#chatForm'),
+    chatInput: $('#chatInput'),
+    stickerTray: $('#stickerTray'),
     toast: $('#toast'),
     conn: $('#conn'),
   };
 
-  // ── Local session state ─────────────────────────────────
+  // ── Local state ──────────────────────────────────────
   let socket = null;
   let view = null;
   let me = null;
   let code = null;
   let token = null;
-  let pendingCard = null; // card awaiting a colour choice
-  let intent = null; // { kind: 'create' } or { kind: 'join', code, token }
-  let autoRejoin = null; // set when we already hold a seat for this table
-  let fromRoom = null; // code from the invite link, before joining
+  let seatsWanted = 2;
+  let intent = null; // { kind: 'create' } | { kind: 'join', code, token }
+  let autoRejoin = null;
+  let pendingCard = null;
   let retryDelay = 600;
   let toastTimer = null;
+  let chatSeen = 0; // how many chat lines have been drawn
+  let lastDealRound = -1;
+
+  // A missing element used to fail silently much later, as a blank screen.
+  for (const [key, node] of Object.entries(el)) {
+    if (!node) throw new Error(`client is missing #${key} — markup and app.js have drifted apart`);
+  }
+
+  const voice = new window.UNOVoice.Voice({
+    send: (kind, to, payload) => send({ t: 'voice', to, kind, payload }),
+    onState: (s) => renderVoice(s),
+  });
 
   const serverOrigin = () => window.UNO_SERVER_URL || window.location.origin;
 
   function wsUrl() {
-    const base = serverOrigin();
-    const u = new URL(base, window.location.href);
+    const u = new URL(serverOrigin(), window.location.href);
     u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
     u.pathname = '/ws';
     u.search = '';
@@ -68,27 +79,16 @@
     return u.toString();
   }
 
-  /** Works under a GitHub Pages project sub-path, not just a domain root. */
   function basePath() {
-    return window.location.pathname
-      .replace(/\/room\/[A-Za-z0-9]{4}\/?$/, '')
-      .replace(/\/$/, '');
+    return window.location.pathname.replace(/\/room\/[A-Za-z0-9]{4}\/?$/, '').replace(/\/$/, '');
   }
 
   /**
-   * Invite links carry the code as a query parameter, not as a path. A query
-   * string works on any static host (GitHub Pages included) without server
-   * rewrites, and keeps relative asset URLs resolving correctly.
+   * Invite links carry the code as a query parameter, not a path: a query string
+   * works on any static host without server rewrites.
    */
   function inviteLink() {
     return `${window.location.origin}${basePath()}/?room=${code}`;
-  }
-
-  function roomCodeFromUrl() {
-    const q = new URLSearchParams(window.location.search).get('room');
-    if (q && /^[A-Za-z0-9]{4}$/.test(q)) return q.toUpperCase();
-    const m = window.location.pathname.match(/^(?:.*\/)?room\/([A-Za-z0-9]{4})\/?$/);
-    return m ? m[1].toUpperCase() : null;
   }
 
   function saveSession() {
@@ -96,7 +96,7 @@
     try {
       localStorage.setItem(`uno:${code}`, JSON.stringify({ token, you: me, name: el.name.value.trim() }));
     } catch {
-      /* private mode: session just will not survive a refresh */
+      /* private mode: the seat just will not survive a refresh */
     }
   }
 
@@ -118,14 +118,14 @@
     el.toast.textContent = message;
     el.toast.classList.remove('hidden');
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => el.toast.classList.add('hidden'), 2600);
+    toastTimer = setTimeout(() => el.toast.classList.add('hidden'), 2800);
   }
 
   function setConnected(ok) {
     el.conn.classList.toggle('hidden', ok);
   }
 
-  // ── Socket ───────────────────────────────────────────
+  // ── Socket ────────────────────────────────────────────
   function connect() {
     setConnected(false);
     socket = new WebSocket(wsUrl());
@@ -181,33 +181,32 @@
         code = msg.code;
         token = msg.token;
         me = msg.you;
+        voice.setMe(me);
+        chatSeen = 0;
+        lastDealRound = -1;
         saveSession();
         history.replaceState(null, '', `${basePath()}/?room=${code}`);
         el.codeChip.textContent = code;
         el.shareLink.value = inviteLink();
         $('#shareLink2').value = inviteLink();
         el.roomCode.textContent = code;
-        if (msg.view.waiting) {
-          show(el.waiting);
-          el.waitingStatus.textContent = `${el.name.value.trim() || 'Player'}, share the link above to start.`;
-        } else {
-          show(el.game);
-          render(msg.view);
-        }
+        render(msg.view);
         break;
 
       case 'state':
-        view = msg.view;
-        if (view.waiting) {
-          show(el.waiting);
-        } else {
-          show(el.game);
-          render(view);
-        }
+        render(msg.view);
+        break;
+
+      case 'chat':
+        appendChat([msg.entry]);
+        break;
+
+      case 'voice':
+        voice.handle(msg.from, msg.kind, msg.payload);
         break;
 
       case 'error':
-        if (msg.message.includes('No game with that code')) {
+        if (/No game with that code/.test(msg.message)) {
           show(el.home);
           el.homeError.textContent = msg.message;
         } else {
@@ -227,7 +226,6 @@
     send({ t: 'join', code, name, token: resumeToken ?? undefined });
   }
 
-  /** Carries out a create/join request, opening the socket first if needed. */
   function request(what) {
     intent = what;
     if (socket && socket.readyState === WebSocket.OPEN) {
@@ -240,28 +238,41 @@
 
   function dispatch(what) {
     const name = el.name.value.trim();
-    if (what.kind === 'create') send({ t: 'create', name });
+    if (what.kind === 'create') send({ t: 'create', name, maxPlayers: what.maxPlayers });
     else joinRoom(what.code, name, what.token);
   }
 
-  // ── Card rendering ───────────────────────────────────
-  function cardEl(card, { mini = false, hidden = false } = {}) {
+  // ── Cards ─────────────────────────────────────────────
+  function cardEl(card, { mini = false, hidden = false, animate = '' } = {}) {
     const node = document.createElement('div');
     node.className = hidden ? 'card face-down' : 'card';
     if (mini) node.classList.add('mini');
-    node.append(hidden ? UNOCards.backSvg() : UNOCards.cardSvg(card, { mini }));
-    if (!hidden && card.color === 'W' && card.chosen) {
-      node.dataset.chosen = UNOCards.NAME[card.chosen];
-    }
+    if (animate) node.classList.add(animate);
+    node.append(hidden ? window.UNOCards.backSvg() : window.UNOCards.cardSvg(card, { mini }));
+    if (!hidden && card.color === 'W' && card.chosen) node.dataset.chosen = window.UNOCards.NAME[card.chosen];
     return node;
   }
 
-  // ── Main render ──────────────────────────────────────
+  // ── Render ────────────────────────────────────────────
   function render(v) {
     view = v;
+    // Follow whoever is talking, so a fresh joiner is not left mid-wait.
+    if (v.waiting) return renderWaiting(v);
+
+    show(el.game);
+    voice.setVoicePeers((v.players || []).filter((p) => p.voice).map((p) => p.id));
+
     const myIndex = v.myIndex;
+    const others = v.players.filter((p) => !p.isMe);
     const mePlayer = v.players[myIndex];
-    const other = v.players.find((p) => !p.isMe);
+
+    // A new deal gets a card-dealing flourish, but only once per round.
+    if (v.phase === 'playing' && v.roundNumber !== lastDealRound) {
+      lastDealRound = v.roundNumber;
+      el.table.classList.remove('dealing');
+      void el.table.offsetWidth; // restart the animation
+      el.table.classList.add('dealing');
+    }
 
     $('#roundChip').textContent = `Round ${v.roundNumber}`;
 
@@ -273,78 +284,93 @@
       if (p.isTurn) row.classList.add('active-turn');
       if (!p.connected) row.classList.add('offline');
 
-      const dot = document.createElement('span');
-      dot.className = 'dot';
-      const nm = document.createElement('span');
-      nm.className = 'nm';
-      nm.textContent = p.name + (p.isMe ? ' (you)' : '');
-      const pts = document.createElement('span');
-      pts.className = 'pts';
-      pts.textContent = p.score;
-      const cards = document.createElement('span');
-      cards.className = 'cards';
-      cards.textContent = `${p.count} card${p.count === 1 ? '' : 's'}`;
-      row.append(dot, nm, pts, cards);
+      row.title = `${p.name}: ${p.score} points, ${p.count} cards${p.connected ? '' : ' (disconnected)'}`;
+      row.append(
+        dot(p),
+        textNode('span', 'nm', p.name + (p.isMe ? ' (you)' : '') + (p.isHost ? ' 👑' : '')),
+        textNode('span', 'pts', `${p.score} pts`),
+        textNode('span', 'sep', '·'),
+        textNode('span', 'cards', `${p.count} cards`),
+      );
       el.scores.append(row);
     }
 
-    // Opponent side
-    el.opponent.replaceChildren();
-    if (other) {
+    // Opponents around the table
+    el.opponents.replaceChildren();
+    others.forEach((other, i) => {
+      const idx = v.players.findIndex((p) => p.id === other.id);
+      const box = document.createElement('div');
+      box.className = 'opponent';
+      if (other.isTurn) box.classList.add('is-turn');
+      if (!other.connected) box.classList.add('offline');
+      box.style.setProperty('--slot', String(i + 1));
+
       const who = document.createElement('div');
       who.className = 'who';
-      who.textContent = other.name;
+      who.append(
+        textNode('span', 'nm', other.name),
+        ...(other.voice ? [textNode('span', 'mic', '🎙')] : []),
+      );
+
       const meta = document.createElement('div');
       meta.className = 'meta';
-      meta.textContent = other.connected ? `${other.count} cards · ${other.total} points in hand` : 'reconnecting…';
-      el.opponent.append(who, meta);
+      meta.textContent = other.connected
+        ? `${other.count} card${other.count === 1 ? '' : 's'} · ${other.total} pts`
+        : 'reconnecting…';
 
       const fan = document.createElement('div');
       fan.className = 'fan';
-      for (let i = 0; i < other.count; i++) fan.append(cardEl(null, { mini: true, hidden: true }));
-      el.opponent.append(fan);
+      for (let n = 0; n < other.count; n++) fan.append(cardEl(null, { mini: true, hidden: true, animate: 'deal-in' }));
 
-      if (v.unoOpen && v.unoOpen.includes(v.players.findIndex((p) => p.id === other.id))) {
+      box.append(who, meta, fan);
+
+      if (v.unoOpen && v.unoOpen.includes(idx)) {
         const warn = document.createElement('div');
-        warn.className = 'meta warn';
-        warn.style.color = '#ffb86b';
-        warn.textContent = 'One card left — no UNO called!';
-        el.opponent.append(warn);
+        warn.className = 'warn-uno';
+        warn.textContent = 'one card — no UNO called!';
+        box.append(warn);
+      }
+      el.opponents.append(box);
+    });
+
+    // Table card and draw pile
+    el.topCard.replaceChildren();
+    if (v.top) {
+      el.topCard.append(cardEl(v.top, { animate: 'play-in' }));
+      if (v.top.color === 'W' && v.top.chosen) {
+        const chip = document.createElement('span');
+        chip.className = 'chosen-chip';
+        chip.textContent = window.UNOCards.NAME[v.top.chosen];
+        el.topCard.append(chip);
       }
     }
-
-    // Table card + draw pile
-    el.topCard.replaceChildren();
-    if (v.top) el.topCard.append(cardEl(v.top));
     el.drawCount.textContent = v.drawCount;
     if (el.drawPileArt && !el.drawPileArt.childElementCount) {
-      el.drawPileArt.append(UNOCards.backSvg());
+      el.drawPileArt.append(window.UNOCards.backSvg());
     }
+
     const myTurn = v.turn === myIndex && v.phase === 'playing';
     el.drawPile.disabled = !myTurn || !v.legal.includes('draw');
 
     // Turn banner
     const banner = document.createElement('div');
-    if (v.phase !== 'playing') {
-      banner.textContent = 'Round over';
-    } else if (v.pendingDraw && v.pendingDraw.targetIndex === myIndex) {
+    if (v.phase !== 'playing') banner.textContent = 'Round over';
+    else if (v.pendingDraw && v.pendingDraw.targetIndex === myIndex) {
       banner.innerHTML = `<span class="warn">Wild Draw Four — take ${v.pendingDraw.n}, or challenge it.</span>`;
-    } else if (myTurn) {
-      banner.textContent = 'Your turn';
-    } else {
-      banner.textContent = `${other ? other.name : 'Waiting'} is thinking…`;
+    } else if (myTurn) banner.textContent = 'Your turn';
+    else {
+      const taker = v.players[v.turn];
+      banner.textContent = `${taker ? taker.name : 'Someone'} is thinking…`;
     }
     el.turnBanner.replaceChildren(banner);
 
-    // Log
-    const last = v.log[v.log.length - 1];
-    el.logStrip.textContent = last || '';
+    el.logStrip.textContent = v.log[v.log.length - 1] || '';
 
     // Hand
     el.hand.replaceChildren();
     const playable = new Set(v.playable || []);
     for (const card of v.hand) {
-      const node = cardEl(card);
+      const node = cardEl(card, { animate: 'deal-in' });
       const can = myTurn && playable.has(card.id);
       if (!can) node.classList.add('dim');
       node.addEventListener('click', () => onCardClick(card, can));
@@ -353,16 +379,6 @@
 
     // Actions
     el.actions.replaceChildren();
-    const button = (label, cls, fn) => {
-      const b = document.createElement('button');
-      b.className = `btn ${cls}`;
-      b.type = 'button';
-      b.textContent = label;
-      b.addEventListener('click', fn);
-      el.actions.append(b);
-      return b;
-    };
-
     if (v.phase === 'playing') {
       if (v.pendingDraw && v.pendingDraw.targetIndex === myIndex) {
         button('Take the cards', 'act-primary', () => act('accept'));
@@ -374,18 +390,74 @@
       if (v.unoOpen && v.unoOpen.includes(myIndex)) {
         button('UNO!', 'act-uno', () => act('uno'));
       }
-      if (v.legal.includes('catch') && other) {
-        const otherIndex = v.players.findIndex((p) => p.id === other.id);
-        if (v.unoOpen && v.unoOpen.includes(otherIndex)) {
-          button(`Caught you, ${other.name}!`, 'act-catch', () => act('catch', { target: otherIndex }));
+      if (v.legal.includes('catch')) {
+        for (const other of others) {
+          const idx = v.players.findIndex((p) => p.id === other.id);
+          if (v.unoOpen && v.unoOpen.includes(idx)) {
+            button(`Caught you, ${other.name}!`, 'act-catch', () => act('catch', { target: idx }));
+          }
         }
       }
     }
 
     if (v.phase === 'roundOver') showRoundBanner(v);
-    else el.roundBanner.classList.add('hidden');
+    else $('#roundBanner').classList.add('hidden');
 
-    el.nextRoundBtn.disabled = !v || v.phase === 'playing';
+    drawChat(v.chat || []);
+  }
+
+  function dot(p) {
+    const d = document.createElement('span');
+    d.className = 'dot';
+    void p;
+    return d;
+  }
+
+  function textNode(tag, cls, content) {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    n.textContent = content;
+    return n;
+  }
+
+  function button(label, cls, fn) {
+    const b = document.createElement('button');
+    b.className = `btn ${cls}`;
+    b.type = 'button';
+    b.textContent = label;
+    b.addEventListener('click', fn);
+    el.actions.append(b);
+    return b;
+  }
+
+  // ── Lobby ─────────────────────────────────────────────
+  function renderWaiting(v) {
+    show(el.waiting);
+    el.roomCode.textContent = v.code;
+    el.shareLink.value = inviteLink();
+    $('#shareLink2').value = inviteLink();
+    el.waitingSub.textContent =
+      v.maxPlayers === v.players.length
+        ? 'Table full — dealing now.'
+        : `Send this link. The game starts at ${v.maxPlayers} players (or when the host starts early).`;
+
+    el.seatList.replaceChildren();
+    for (let i = 0; i < v.maxPlayers; i++) {
+      const seat = v.players[i];
+      const li = document.createElement('li');
+      li.className = `seat${seat ? ' taken' : ' empty'}${seat?.isMe ? ' mine' : ''}`;
+      li.append(
+        textNode('span', 'seat-dot', ''),
+        textNode('span', 'seat-name', seat ? seat.name + (seat.isHost ? ' 👑' : '') : 'waiting…'),
+        seat ? textNode('span', 'seat-flag', seat.connected ? 'here' : 'away') : null,
+      );
+      el.seatList.append(li);
+    }
+
+    const start = $('#startBtn');
+    start.classList.toggle('hidden', !(v.isHost && v.canStart));
+    start.textContent = v.isFull ? 'Deal' : `Start with ${v.players.length}`;
+    $('#resizeBtn').classList.toggle('hidden', !v.isHost);
   }
 
   function showRoundBanner(v) {
@@ -402,35 +474,100 @@
       body.textContent = `+${v.roundPoints} points from the cards left on the table.`;
     }
 
-    el.tally.replaceChildren();
+    $('#tally').replaceChildren();
     for (const p of v.players) {
       const tr = document.createElement('tr');
-      const a = document.createElement('td');
-      a.textContent = p.name + (p.isMe ? ' (you)' : '');
-      const b = document.createElement('td');
-      b.textContent = `${p.score} pts · ${p.roundWins} round${p.roundWins === 1 ? '' : 'wins'}`;
-      tr.append(a, b);
-      el.tally.append(tr);
+      tr.append(
+        textNode('td', '', p.name + (p.isMe ? ' (you)' : '')),
+        textNode('td', '', `${p.score} pts · ${p.roundWins} round${p.roundWins === 1 ? '' : 'wins'}`),
+      );
+      $('#tally').append(tr);
     }
-
-    if (v.phase === 'roundOver' && el.roundBanner.classList.contains('hidden')) {
-      el.roundBanner.classList.remove('hidden');
-    }
+    if ($('#roundBanner').classList.contains('hidden')) $('#roundBanner').classList.remove('hidden');
   }
 
-  // ── Interaction ──────────────────────────────────────
+  // ── Chat ──────────────────────────────────────────────
+  function appendChat(entries) {
+    const log = el.chatLog;
+    for (const entry of entries) {
+      if (entry.seq <= chatSeen) continue; // skip lines already drawn
+      chatSeen = entry.seq;
+
+      const line = document.createElement('div');
+      line.className = `chat-line${entry.from === me ? ' mine' : ''}`;
+      line.append(textNode('span', 'chat-name', `${entry.name}: `));
+
+      if (entry.sticker) {
+        const s = document.createElement('span');
+        s.className = 'sticker';
+        s.textContent = window.UNOStickers.glyph(entry.sticker);
+        s.title = entry.sticker;
+        line.append(s);
+      } else {
+        line.append(textNode('span', 'chat-text', entry.text));
+      }
+      log.append(line);
+      if (!el.chatPanel.classList.contains('hidden') || entry.from === me) {
+        log.scrollTop = log.scrollHeight;
+      } else {
+        // Flag it rather than opening the panel over the table, which would
+        // cover the cards and can sit on top of the Draw button.
+        $('#chatToggle').classList.add('has-new');
+        if (!entry.sticker) toast(`${entry.name}: ${entry.text}`);
+        else toast(`${entry.name} sent a sticker`);
+      }
+    }
+    while (log.childElementCount > 60) log.firstChild.remove();
+    log.scrollTop = log.scrollHeight;
+  }
+
+  function drawChat(history) {
+    const fresh = (history || []).filter((e) => e.seq > chatSeen);
+    if (fresh.length) appendChat(fresh);
+  }
+
+  // ── Voice ─────────────────────────────────────────────
+  function renderVoice(s) {
+    const btn = $('#voiceBtn');
+    if (s.error) toast(s.error);
+    btn.classList.toggle('on', Boolean(s.enabled));
+    btn.classList.toggle('muted', Boolean(s.enabled && s.muted));
+    $('#voiceIcon').textContent = s.enabled ? (s.muted ? '🔇' : '🎙') : '🎙';
+    $('#voiceLabel').textContent = s.enabled ? (s.muted ? 'Muted' : 'Live') : 'Voice';
+    btn.title = s.enabled
+      ? `${(s.peers || []).filter((p) => p.connected).length} connected. Voice uses data.`
+      : 'Voice uses data — off by default';
+  }
+
+  $('#voiceBtn').addEventListener('click', () => {
+    if (voice.enabled) {
+      voice.setMuted(!voice.muted);
+      return;
+    }
+    $('#voiceBanner').classList.remove('hidden');
+  });
+
+  $('#voiceGo').addEventListener('click', async () => {
+    $('#voiceBanner').classList.add('hidden');
+    const marks = (view?.players || []).filter((p) => p.voice).map((p) => p.id);
+    await voice.enable();
+    if (voice.enabled) act('voice', { enabled: true });
+    voice.setVoicePeers(marks);
+  });
+
+  // ── Interaction ───────────────────────────────────────
   function onCardClick(card, can) {
     if (!can) return;
-    if (card.kind === 'wild' || card.kind === 'wild4') {
+    if (card.color === 'W') {
       pendingCard = card;
-      el.colorPicker.classList.remove('hidden');
+      $('#colorPicker').classList.remove('hidden');
       return;
     }
     act('play', { cardId: card.id });
   }
 
-  el.colorGrid.replaceChildren();
-  COLOR_ORDER.forEach((c) => {
+  $('#colorGrid').replaceChildren();
+  for (const c of COLOR_ORDER) {
     const b = document.createElement('button');
     b.type = 'button';
     b.className = `swatch ${c.toLowerCase()}`;
@@ -438,38 +575,46 @@
     b.addEventListener('click', () => {
       if (pendingCard) act('play', { cardId: pendingCard.id, color: c });
       pendingCard = null;
-      el.colorPicker.classList.add('hidden');
+      $('#colorPicker').classList.add('hidden');
     });
-    el.colorGrid.append(b);
-  });
-
-  for (const node of document.querySelectorAll('[data-close]')) {
-    node.addEventListener('click', () => {
-      document.getElementById(node.dataset.close).classList.add('hidden');
-    });
+    $('#colorGrid').append(b);
   }
 
-  el.nextRoundBtn.addEventListener('click', () => {
+  for (const node of document.querySelectorAll('[data-close]')) {
+    node.addEventListener('click', () => document.getElementById(node.dataset.close).classList.add('hidden'));
+  }
+
+  $('#nextRoundBtn').addEventListener('click', () => {
     act('nextRound');
-    el.roundBanner.classList.add('hidden');
+    $('#roundBanner').classList.add('hidden');
+  });
+
+  $('#drawPile').addEventListener('click', () => {
+    el.drawPile.classList.remove('bump');
+    void el.drawPile.offsetWidth;
+    el.drawPile.classList.add('bump');
+    act('draw');
   });
 
   $('#copyLinkBtn').addEventListener('click', () => {
-    el.linkBanner.classList.remove('hidden');
     $('#shareLink2').value = inviteLink();
+    $('#linkBanner').classList.remove('hidden');
   });
   $('#copyBtn2').addEventListener('click', () => copy(inviteLink()));
+  $('#copyBtn').addEventListener('click', () => {
+    el.shareLink.select();
+    copy(el.shareLink.value);
+  });
 
   function copy(text) {
-    const done = () => toast('Link copied — send it to your friend.');
+    const done = () => toast('Link copied — send it to your friends.');
     if (navigator.clipboard?.writeText) {
       navigator.clipboard.writeText(text).then(done, () => fallback());
     } else {
       fallback();
     }
     function fallback() {
-      const input = $('#shareLink2');
-      input.select();
+      $('#shareLink2').select();
       try {
         document.execCommand('copy');
         done();
@@ -479,21 +624,43 @@
     }
   }
 
-  $('#copyBtn').addEventListener('click', () => {
-    el.shareLink.select();
-    copy(el.shareLink.value);
+  // ── Chat UI ───────────────────────────────────────────
+  $('#chatToggle').addEventListener('click', () => {
+    el.chatPanel.classList.toggle('hidden');
+    $('#chatToggle').classList.remove('has-new');
+    if (!el.chatPanel.classList.contains('hidden')) el.chatInput.focus();
+  });
+  $('#chatClose').addEventListener('click', () => el.chatPanel.classList.add('hidden'));
+
+  el.chatForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const text = el.chatInput.value.trim();
+    if (!text) return;
+    send({ t: 'chat', text });
+    el.chatInput.value = '';
   });
 
-  $('#leaveWaiting').addEventListener('click', () => {
-    send({ t: 'leave' });
-    code = null;
-    token = null;
-    me = null;
-    history.replaceState(null, '', `${basePath()}/`);
-    show(el.home);
-  });
+  el.stickerTray.replaceChildren();
+  for (const sticker of window.UNOStickers.STICKERS) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'sticker-btn';
+    b.textContent = sticker.glyph;
+    b.title = sticker.name;
+    b.addEventListener('click', () => send({ t: 'chat', sticker: sticker.id }));
+    el.stickerTray.append(b);
+  }
 
-  // Home screen routing
+  // ── Player count picker ───────────────────────────────
+  for (const b of el.playerCount.querySelectorAll('.count')) {
+    b.addEventListener('click', () => {
+      seatsWanted = Number(b.dataset.seats);
+      for (const other of el.playerCount.querySelectorAll('.count')) {
+        other.setAttribute('aria-checked', String(other === b));
+      }
+    });
+  }
+
   el.joinForm.addEventListener('submit', (event) => {
     event.preventDefault();
     el.homeError.textContent = '';
@@ -501,7 +668,7 @@
       const saved = loadSession(fromRoom);
       request({ kind: 'join', code: fromRoom, token: saved?.token ?? null });
     } else {
-      request({ kind: 'create' });
+      request({ kind: 'create', maxPlayers: seatsWanted });
     }
   });
 
@@ -515,29 +682,51 @@
     request({ kind: 'join', code: value, token: loadSession(value)?.token ?? null });
   });
 
-  // ── Boot ─────────────────────────────────────────────
+  $('#startBtn').addEventListener('click', () => act('start'));
+
+  $('#resizeBtn').addEventListener('click', () => {
+    const next = seatsWanted >= 6 ? 2 : seatsWanted + 1;
+    seatsWanted = next;
+    for (const other of el.playerCount.querySelectorAll('.count')) {
+      other.setAttribute('aria-checked', String(Number(other.dataset.seats) === next));
+    }
+    act('addSeats', { maxPlayers: next });
+  });
+
+  $('#leaveWaiting').addEventListener('click', () => {
+    send({ t: 'leave' });
+    voice.disable();
+    code = token = me = null;
+    history.replaceState(null, '', `${basePath()}/`);
+    show(el.home);
+  });
+
+  function roomCodeFromUrl() {
+    const q = new URLSearchParams(window.location.search).get('room');
+    if (q && /^[A-Za-z0-9]{4}$/.test(q)) return q.toUpperCase();
+    const m = window.location.pathname.match(/^(?:.*\/)?room\/([A-Za-z0-9]{4})\/?$/);
+    return m ? m[1].toUpperCase() : null;
+  }
+
+  // ── Boot ──────────────────────────────────────────────
+  let fromRoom = null;
   fromRoom = roomCodeFromUrl();
   const saved = fromRoom ? loadSession(fromRoom) : null;
 
   if (fromRoom && saved?.token) {
-    // Already holding a seat for this table (a refresh, or a dropped
-    // connection): go straight back in without asking for a name again.
+    // Already holding a seat for this table: go straight back in.
     if (saved.name) el.name.value = saved.name;
     autoRejoin = { code: fromRoom, token: saved.token, name: saved.name };
     connect();
   } else if (fromRoom) {
-    // First time here: ask for a name, then join.
     if (saved?.name) el.name.value = saved.name;
     $('#createBtn').textContent = 'Join the game';
     el.codeEntry.classList.add('hidden');
-    el.homeError.textContent = '';
+    el.home.focus?.();
     el.name.focus();
   } else {
-    el.codeEntry.classList.remove('hidden');
     el.name.focus();
   }
 
-  window.addEventListener('beforeunload', () => {
-    saveSession();
-  });
+  window.addEventListener('beforeunload', saveSession);
 })();

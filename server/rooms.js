@@ -1,8 +1,8 @@
 /**
  * Rooms: who is sitting where, and the live game behind them.
  *
- * The rules live in game.js. This file only owns identity, membership and
- * broadcasting. Nothing here decides what a legal move is.
+ * The rules live in game.js. This file owns identity, membership, chat and
+ * relaying. Nothing here decides what a legal move is.
  */
 
 import { randomInt, randomUUID } from 'node:crypto';
@@ -22,19 +22,25 @@ import {
 
 // No 0/O/1/I: these codes get read aloud and typed by hand.
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-const MAX_SEATS = 2;
+export const MIN_SEATS = 2;
+export const MAX_SEATS = 6;
+const CHAT_HISTORY = 40;
 const RECONNECT_GRACE_MS = 30 * 60 * 1000; // keep the seat for 30 minutes
 const ROOM_TTL_MS = 6 * 60 * 60 * 1000; // drop forgotten rooms after 6 hours
+const MSG = { MAX_LEN: 400, MAX_STICKER_LEN: 8 };
 
 /** @type {Map<string, Room>} */
 const rooms = new Map();
 
 class Room {
-  constructor(code, targetScore = null) {
+  constructor(code, maxPlayers) {
     this.code = code;
-    this.seats = []; // { id, token, name, socket, connected, droppedAt }
+    this.maxPlayers = maxPlayers; // seats at this table
+    this.seats = []; // { id, token, name, socket, connected, droppedAt, voice }
     this.state = null;
-    this.targetScore = targetScore;
+    this.hostId = null;
+    this.chat = []; // recent messages, bounded
+    this.chatSeq = 0;
     this.createdAt = Date.now();
     this.touchedAt = Date.now();
   }
@@ -45,6 +51,10 @@ class Room {
 
   get liveSeats() {
     return this.seats.filter((s) => !s.droppedAt);
+  }
+
+  get isFull() {
+    return this.liveSeats.length >= this.maxPlayers;
   }
 }
 
@@ -57,10 +67,16 @@ function makeCode() {
   return code;
 }
 
-export function createRoom({ targetScore = null } = {}) {
-  const room = new Room(makeCode(), targetScore);
+export function createRoom({ maxPlayers = MIN_SEATS } = {}) {
+  const seats = clampSeats(maxPlayers);
+  const room = new Room(makeCode(), seats);
   rooms.set(room.code, room);
   return room;
+}
+
+function clampSeats(n) {
+  const wanted = Number.isFinite(Number(n)) ? Math.round(Number(n)) : MIN_SEATS;
+  return Math.min(MAX_SEATS, Math.max(MIN_SEATS, wanted));
 }
 
 export function getRoom(code) {
@@ -85,7 +101,10 @@ export function addPlayer(room, { name, token }) {
   }
 
   if (room.seats.length >= MAX_SEATS) {
-    return { error: 'That game already has two players.' };
+    return { error: 'That table is full.' };
+  }
+  if (room.isFull) {
+    return { error: `That table is set for ${room.maxPlayers} players.` };
   }
 
   const seat = {
@@ -95,20 +114,29 @@ export function addPlayer(room, { name, token }) {
     socket: null,
     connected: false,
     droppedAt: null,
+    voice: false, // opt in; off until someone asks for the microphone
   };
   room.seats.push(seat);
+  if (room.hostId === null) room.hostId = seat.id;
   room.touchedAt = Date.now();
   return { seat, rejoined: false };
 }
 
-/** Deals the first hand once both seats are filled. */
-export function startIfReady(room) {
+/** True once there are enough players to deal. */
+export function canStart(room) {
+  return room.liveSeats.length >= MIN_SEATS;
+}
+
+/** Deals the hand. Called when the table fills, or when the host starts early. */
+export function startIfReady(room, { force = false } = {}) {
   if (room.state) return true;
   const seats = room.liveSeats;
-  if (seats.length < 2) return false;
+  if (seats.length < MIN_SEATS) return false;
+  if (!force && seats.length < room.maxPlayers) return false;
+
   room.state = createMatch({
     players: seats.map((s) => ({ id: s.id, name: s.name })),
-    targetScore: room.targetScore,
+    dealer: 0,
   });
   room.touchedAt = Date.now();
   return true;
@@ -124,6 +152,18 @@ export function detachSeat(room, seat) {
     const p = room.state.players.find((x) => x.id === seat.id);
     if (p) p.connected = false;
   }
+  // Keep the game playable: hand the turn on rather than stalling on a ghost.
+  if (room.state && room.state.phase === 'playing') {
+    const idx = room.state.players.findIndex((x) => x.id === seat.id);
+    if (idx >= 0 && room.state.turn === idx) {
+      room.state.turn = (idx + 1) % room.state.players.length;
+    }
+  }
+  // Pass the host role on if the host left.
+  if (room.hostId === seat.id) {
+    const next = room.liveSeats[0];
+    room.hostId = next ? next.id : null;
+  }
 }
 
 /**
@@ -132,7 +172,28 @@ export function detachSeat(room, seat) {
  * the caller is told why.
  */
 export function applyAction(room, seat, msg) {
-  if (!room.state) return { error: 'Waiting for a second player.' };
+  // Table-level intents that do not need a live match.
+  if (msg.action === 'start') {
+    if (room.state) return { error: 'The game has already started.' };
+    if (room.hostId !== seat.id) return { error: 'Only the host can start the game.' };
+    if (!startIfReady(room, { force: true })) return { error: 'Need at least two players.' };
+    return { ok: true, started: true };
+  }
+
+  if (msg.action === 'voice') {
+    seat.voice = Boolean(msg.enabled);
+    room.touchedAt = Date.now();
+    return { ok: true, voiceOnly: true }; // presence change, no board change
+  }
+
+  if (msg.action === 'addSeats') {
+    if (room.hostId !== seat.id) return { error: 'Only the host can change the table size.' };
+    if (room.state) return { error: 'The game has already started.' };
+    room.maxPlayers = clampSeats(msg.maxPlayers);
+    return { ok: true, seatsOnly: true };
+  }
+
+  if (!room.state) return { error: 'Waiting for the game to start.' };
   const index = room.state.players.findIndex((p) => p.id === seat.id);
   if (index < 0) return { error: 'You are not in this game.' };
 
@@ -168,9 +229,34 @@ export function applyAction(room, seat, msg) {
 export function restartMatch(room) {
   room.state = createMatch({
     players: room.liveSeats.map((s) => ({ id: s.id, name: s.name })),
-    targetScore: room.targetScore,
   });
   return { ok: true };
+}
+
+/**
+ * Adds a chat line or sticker. Kept small and bounded: this is the one message
+ * type that must stay cheap, since every player receives every line.
+ */
+export function addChat(room, seat, msg) {
+  if (room.chat.length >= CHAT_HISTORY) room.chat.shift();
+  const isSticker = msg.sticker !== undefined && msg.sticker !== null;
+  const body = isSticker
+    ? String(msg.sticker).slice(0, MSG.MAX_STICKER_LEN)
+    : String(msg.text ?? '').slice(0, MSG.MAX_LEN);
+
+  if (!isSticker && !body.trim()) return { error: 'Say something first.' };
+
+  const entry = {
+    seq: ++room.chatSeq,
+    from: seat.id,
+    name: seat.name,
+    sticker: isSticker ? body : null,
+    text: isSticker ? null : body,
+    at: Date.now(),
+  };
+  room.chat.push(entry);
+  room.touchedAt = Date.now();
+  return { ok: true, entry };
 }
 
 /** Removes the player, and the room if nobody is left to play it. */
@@ -180,28 +266,65 @@ export function removeSeat(room, seat) {
   if (room.state) {
     room.state.players = room.state.players.filter((p) => p.id !== seat.id);
   }
+  if (room.hostId === seat.id) {
+    const next = room.liveSeats[0];
+    room.hostId = next ? next.id : null;
+  }
   room.touchedAt = Date.now();
   if (room.seats.length === 0) rooms.delete(room.code);
 }
 
+/** Seats plus lobby flags, sent on every view so presence stays current. */
+export function lobbyFor(room, seat) {
+  return {
+    waiting: true,
+    code: room.code,
+    maxPlayers: room.maxPlayers,
+    minPlayers: MIN_SEATS,
+    you: seat.id,
+    isHost: room.hostId === seat.id,
+    canStart: canStart(room),
+    isFull: room.isFull,
+    players: room.seats.map((s) => ({
+      id: s.id,
+      name: s.name,
+      connected: s.connected,
+      voice: s.voice,
+      isMe: s.id === seat.id,
+      isHost: s.id === room.hostId,
+    })),
+  };
+}
+
 /** The wire view for one seat. */
 export function viewForSeat(room, seat, { full = false } = {}) {
-  if (!room.state) {
-    return {
-      waiting: true,
-      code: room.code,
-      players: room.seats.map((s) => ({ id: s.id, name: s.name, connected: s.connected, isMe: s.id === seat.id })),
-      you: seat.id,
-    };
-  }
+  const lobby = lobbyFor(room, seat);
+  if (!room.state) return { ...lobby, chat: room.chat };
+
   const base = viewFor(room.state, seat.id, { includeAllHands: full });
+
+  // Fold seat-level presence (microphone on, host) into the per-player list so
+  // the table UI has everything in one place while a game is running.
+  base.players = base.players.map((p) => {
+    const s = room.seatFor(p.id);
+    return { ...p, voice: Boolean(s?.voice), isHost: p.id === room.hostId };
+  });
+
   return {
     ...base,
     waiting: false,
     code: room.code,
-    targetScore: room.targetScore ?? null,
+    maxPlayers: room.maxPlayers,
+    isHost: room.hostId === seat.id,
     you: seat.id,
-    seats: room.seats.map((s) => ({ id: s.id, name: s.name, connected: s.connected })),
+    seats: room.seats.map((s) => ({
+      id: s.id,
+      name: s.name,
+      connected: s.connected,
+      voice: s.voice,
+      isHost: s.id === room.hostId,
+    })),
+    chat: room.chat,
   };
 }
 

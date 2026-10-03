@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>UNO — play a friend</title>
-<meta name="description" content="Play UNO with a friend online. Create a game, send the link, play as many rounds as you like." />
+<title>UNO — play your friends</title>
+<meta name="description" content="Play UNO online with up to six friends. Create a game, send the link, chat and talk while you play." />
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='11' cy='11' r='8' fill='%23e63946'/><circle cx='21' cy='21' r='8' fill='%232f6fd0'/></svg>" />
 <link rel="stylesheet" href="style.css" />
 </head>
@@ -14,16 +14,25 @@
 <main id="home" class="screen">
   <div class="home-card">
     <h1 class="logo"><span class="r">U</span><span class="y">N</span><span class="g">O</span></h1>
-    <p class="tagline">Two players. One link. As many rounds as you want.</p>
+    <p class="tagline">Up to six players. One link. As many rounds as you like.</p>
 
     <form id="joinForm" autocomplete="off">
       <label for="nameInput">Your name</label>
       <input id="nameInput" maxlength="16" placeholder="Player" autocomplete="nickname" required />
 
+      <label for="playerCount">Players</label>
+      <div class="count-row" id="playerCount" role="radiogroup" aria-label="How many players">
+        <button type="button" class="count" data-seats="2" role="radio" aria-checked="true">2</button>
+        <button type="button" class="count" data-seats="3" role="radio" aria-checked="false">3</button>
+        <button type="button" class="count" data-seats="4" role="radio" aria-checked="false">4</button>
+        <button type="button" class="count" data-seats="5" role="radio" aria-checked="false">5</button>
+        <button type="button" class="count" data-seats="6" role="radio" aria-checked="false">6</button>
+      </div>
+
       <button id="createBtn" class="btn primary" type="submit">Create a game</button>
 
-      <div id="codeEntry" class="hidden">
-        <label for="codeInput">Or enter a game code</label>
+      <div id="codeEntry">
+        <label for="codeInput">Or join with a code</label>
         <input id="codeInput" maxlength="4" placeholder="ABCD" autocapitalize="characters" />
         <button id="joinBtn" class="btn" type="button">Join</button>
       </div>
@@ -33,57 +42,86 @@
   </div>
 </main>
 
-<!-- ── Waiting for a friend ─────────────────────────────── -->
+<!-- ── Waiting for players ──────────────────────────────── -->
 <main id="waiting" class="screen hidden">
-  <div class="home-card">
-    <h2>Waiting for your friend</h2>
-    <p class="tagline">Send them this link. The game starts the moment they open it.</p>
+  <div class="home-card wide">
+    <h2>Waiting for players</h2>
+    <p class="tagline" id="waitingSub">Send them this link. The game starts when the table is full.</p>
+
     <div class="code-display" id="roomCode">····</div>
+
     <div class="share-row">
-      <input id="shareLink" readonly />
+      <input id="shareLink" readonly aria-label="Invite link" />
       <button id="copyBtn" class="btn primary" type="button">Copy link</button>
     </div>
-    <p id="waitingStatus" class="muted">Link copied to your clipboard? It does not matter — they can also type the code.</p>
-    <button id="leaveWaiting" class="btn subtle" type="button">Cancel</button>
+
+    <ul id="seatList" class="seat-list"></ul>
+
+    <div class="waiting-actions">
+      <button id="startBtn" class="btn primary hidden" type="button">Start now</button>
+      <button id="resizeBtn" class="btn subtle" type="button">Change player count</button>
+      <button id="leaveWaiting" class="btn subtle" type="button">Cancel</button>
+    </div>
   </div>
 </main>
 
 <!-- ── Table ────────────────────────────────────────────── -->
 <main id="game" class="screen hidden">
+
   <header class="bar">
     <div class="scores" id="scores"></div>
     <div class="bar-right">
       <span class="chip" id="roundChip">Round 1</span>
+      <button id="voiceBtn" class="chip chip-btn" type="button" title="Voice uses data — off by default">
+        <span id="voiceIcon">🎙</span><span id="voiceLabel">Voice</span>
+      </button>
       <span class="chip" id="codeChip" title="Game code"></span>
-      <button id="copyLinkBtn" class="linkish" type="button">Copy invite</button>
+      <button id="copyLinkBtn" class="linkish" type="button">Invite</button>
+      <button id="chatToggle" class="linkish" type="button">Chat</button>
     </div>
   </header>
 
-  <section class="table" id="table">
-    <div class="side" id="opponent"></div>
-
-    <div class="centre">
-      <div class="pile-row">
-        <button id="drawPile" class="pile draw-pile" type="button" aria-label="Draw a card">
-          <span class="pile-back" id="drawPileArt"></span>
-          <span class="pile-count" id="drawCount"></span>
-        </button>
-        <div class="top-card-slot">
-          <div id="topCard" class="card top"></div>
-          <span class="slot-label">table</span>
+  <div class="play-area">
+    <section class="table" id="table">
+      <div class="opponents" id="opponents"></div>
+      <div class="centre">
+        <div class="pile-row">
+          <button id="drawPile" class="pile draw-pile" type="button" aria-label="Draw a card">
+            <span class="pile-back" id="drawPileArt"></span>
+            <span class="pile-count" id="drawCount"></span>
+          </button>
+          <div class="top-card-slot">
+            <div id="topCard" class="card top"></div>
+            <span class="slot-label">table</span>
+          </div>
         </div>
+        <div id="turnBanner" class="turn-banner"></div>
       </div>
-      <div id="turnBanner" class="turn-banner"></div>
+    </section>
+
+    <section class="hand-area">
+      <div id="logStrip" class="log-strip"></div>
+      <div id="hand" class="hand"></div>
+      <div class="actions" id="actions"></div>
+    </section>
+  </div>
+
+  <!-- Chat -->
+  <aside id="chatPanel" class="chat hidden" aria-label="Chat">
+    <div class="chat-head">
+      <strong>Chat</strong>
+      <button id="chatClose" class="linkish" type="button">Close</button>
     </div>
-  </section>
+    <div id="chatLog" class="chat-log" aria-live="polite"></div>
+    <div id="stickerTray" class="sticker-tray"></div>
+    <form id="chatForm" autocomplete="off">
+      <input id="chatInput" maxlength="400" placeholder="Say something…" aria-label="Chat message" />
+      <button class="btn primary chat-send" type="submit" aria-label="Send">Send</button>
+    </form>
+    <p class="chat-note">Stickers are a few bytes each. Uploading images would cost every player data on every send.</p>
+  </aside>
 
-  <section class="hand-area">
-    <div id="logStrip" class="log-strip"></div>
-    <div id="hand" class="hand"></div>
-    <div class="actions" id="actions"></div>
-  </section>
-
-  <!-- Modal overlays -->
+  <!-- Overlays -->
   <div id="colorPicker" class="overlay hidden">
     <div class="overlay-box">
       <h3>Pick a colour</h3>
@@ -104,12 +142,24 @@
 
   <div id="linkBanner" class="overlay hidden">
     <div class="overlay-box">
-      <h3>Invite a friend</h3>
+      <h3>Invite players</h3>
+      <p class="muted">Anyone with this link can take a free seat.</p>
       <div class="share-row">
-        <input id="shareLink2" readonly />
+        <input id="shareLink2" readonly aria-label="Invite link" />
         <button id="copyBtn2" class="btn primary" type="button">Copy link</button>
       </div>
       <button class="btn subtle" data-close="linkBanner" type="button">Close</button>
+    </div>
+  </div>
+
+  <div id="voiceBanner" class="overlay hidden">
+    <div class="overlay-box">
+      <h3>Turn on voice?</h3>
+      <p>Voice talks directly to the other players, not through the server. It is the only part of this
+         app that uses real bandwidth — roughly 24 kbps per player while you are talking.</p>
+      <p class="muted">Nobody can hear you until you allow the microphone. Turn it off any time.</p>
+      <button id="voiceGo" class="btn primary" type="button">Turn on mic</button>
+      <button class="btn subtle" data-close="voiceBanner" type="button">Not now</button>
     </div>
   </div>
 </main>
@@ -119,6 +169,8 @@
 
 <script src="config.js"></script>
 <script src="cards.js"></script>
+<script src="stickers.js"></script>
+<script src="voice.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

@@ -1,15 +1,17 @@
-# UNO — play a friend online
+# UNO — play your friends online
 
-Create a game, send your friend one link, and play as many rounds as you like.
-Full UNO rules, two players, no accounts.
+Create a game, send one link, and play as many rounds as you like. Up to six
+players, with chat, stickers and optional voice. Full UNO rules, no accounts.
 
 ```bash
 npm install
 npm start          # http://localhost:3000
-npm test           # 74 tests: rules engine + real WebSocket clients
+npm test           # 88 tests: rules engine + real WebSocket clients
 ```
 
-To try it with a friend on your network, give them `http://<your-ip>:3000`.
+To try it with friends on your network, give them `http://<your-ip>:3000`.
+Voice chat needs HTTPS in production: browsers only grant microphone access on
+a secure origin (or localhost).
 
 ---
 
@@ -20,6 +22,9 @@ To try it with a friend on your network, give them `http://<your-ip>:3000`.
 | `server/game.js` | The rules. Pure functions, no I/O. This is the only place a legal move is decided. |
 | `server/rooms.js` | Who is at which table, and the game behind it. |
 | `server/index.js` | HTTP (serves the client) + WebSocket (`/ws`). |
+| `public/cards.js` | Card artwork, drawn as inline SVG. |
+| `public/stickers.js` | The built-in sticker set (glyphs, not images). |
+| `public/voice.js` | WebRTC mesh; the server only relays the handshake. |
 | `public/` | The client. Sends intents, renders whatever the server says is true. |
 
 **The server owns the game.** A browser only ever sends intents (`play`, `draw`,
@@ -61,6 +66,56 @@ two each of skip / reverse / draw-two, plus four wilds and four wild draw-fours.
 Two deliberate simplifications, both to keep the rules unambiguous: draw twos
 cannot be stacked (the penalty is mandatory), and a round is not capped at 500
 points — it just keeps going, as asked.
+
+## More than two players
+
+Pick 2–6 when you create the game. The deal starts when the table fills, or
+sooner if the host presses **Start now** — handy when you would rather not wait
+for a sixth person. The host can resize the table any time before the deal, and
+the crown in the scoreboard shows who that is.
+
+Everything else is unchanged: hands stay hidden, the server still decides every
+move, and the turn passes properly around a table of any size. If someone drops
+mid-turn, the turn is handed on rather than stalling on a ghost seat, and their
+seat is kept for 30 minutes.
+
+## Chat, stickers and voice
+
+**Chat** is its own small message type. It deliberately does *not* carry the
+board — text is the most frequent traffic in the app, and bundling the game
+state with every sentence would make "ok" cost a full state push.
+
+**Stickers** are a built-in set of glyphs, not uploaded images. An image sticker
+is tens of kilobytes that every player downloads; a sticker here is a few bytes
+of a short id, so a table can spam them all day for almost nothing. Uploaded
+images would also need somewhere to live — there is no storage in this project.
+Messages are capped at 400 characters and the last 40 lines are kept.
+
+**Voice** is peer-to-peer WebRTC. The server relays the offer/answer/ICE
+handshake between two players and stores none of it — it never sees or forwards
+a byte of audio. Each player holds a connection to each other player, which is
+fine for six and would not scale to a hundred.
+
+### The honest part about data
+
+Voice is the only thing here that costs real bandwidth, and it costs far more
+than everything else combined: roughly **24 kbps per player** while talking, on
+top of a few hundred bytes of signalling once per peer. So:
+
+- Voice is **opt-in and off by default**, and the UI says what it costs before
+  you allow the microphone.
+- The badge shows whether your mic is live or muted, and who else is on voice.
+- Muting disables the audio track without tearing down the connection, so
+  un-muting is instant and costs nothing to set up again.
+- If nobody turns it on, the app uses no more data than before voice existed.
+
+Everything else is deliberately cheap:
+
+- `permessage-deflate` is on for the WebSocket, which suits chat and card state
+  because both are highly repetitive.
+- Chat and stickers do not trigger a board broadcast.
+- Voice presence changes and table resizes send only the lobby, never the cards.
+- Animations are entirely local — they cost no data at all, only frame rate.
 
 ## Reliability
 

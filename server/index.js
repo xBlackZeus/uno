@@ -21,15 +21,17 @@ import {
   detachSeat,
   removeSeat,
   applyAction,
+  addChat,
   viewForSeat,
   sweep,
   roomCount,
+  MIN_SEATS,
+  MAX_SEATS,
 } from './rooms.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const PORT = Number(process.env.PORT) || 3000;
-const MAX_PLAYERS = 2;
 const MAX_MESSAGE_BYTES = 8 * 1024;
 
 const MIME = {
@@ -98,7 +100,15 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-const wss = new WebSocketServer({ server, path: '/ws', maxPayload: MAX_MESSAGE_BYTES });
+const wss = new WebSocketServer({
+  server,
+  path: '/ws',
+  maxPayload: MAX_MESSAGE_BYTES,
+  // Chat and card state are highly repetitive, so they compress very well.
+  // Chat is the only chatty traffic this server sees, so this is most of the
+  // data saving available without changing the protocol.
+  perMessageDeflate: { threshold: 256, zlibDeflateLevel: 6 },
+});
 
 function send(socket, payload) {
   if (socket && socket.readyState === socket.OPEN) {
@@ -118,6 +128,26 @@ function broadcastRoom(room) {
   for (const seat of room.seats) {
     if (!seat.socket) continue;
     send(seat.socket, { t: 'state', view: viewForSeat(room, seat) });
+  }
+}
+
+/** Cheaper than broadcastRoom when the board has not changed. */
+function broadcastLobby(room) {
+  for (const seat of room.seats) {
+    if (!seat.socket) continue;
+    send(seat.socket, { t: 'state', view: viewForSeat(room, seat) });
+  }
+}
+
+/**
+ * Chat goes to everyone as its own small message. It deliberately does not carry
+ * the board: text is the most frequent traffic here and would otherwise make
+ * every sentence cost a full state push.
+ */
+function broadcastChat(room, entry) {
+  for (const seat of room.seats) {
+    if (!seat.socket) continue;
+    send(seat.socket, { t: 'chat', entry });
   }
 }
 
@@ -144,6 +174,12 @@ wss.on('connection', (socket) => {
     }
     if (msg.t === 'action') {
       return handleAction(socket, msg);
+    }
+    if (msg.t === 'chat') {
+      return handleChat(socket, msg);
+    }
+    if (msg.t === 'voice') {
+      return handleVoice(socket, msg);
     }
     if (msg.t === 'ping') {
       return send(socket, { t: 'pong' });
@@ -175,7 +211,7 @@ function handleJoin(socket, msg) {
   let rejoined = false;
 
   if (msg.t === 'create') {
-    room = createRoom({});
+    room = createRoom({ maxPlayers: msg.maxPlayers });
     const res = addPlayer(room, { name });
     if (res.error) return send(socket, { t: 'error', message: res.error });
     seat = res.seat;
@@ -235,8 +271,48 @@ function handleAction(socket, msg) {
     if (result?.leaving) return handleLeave(socket);
     if (result?.error) send(socket, { t: 'error', message: result.error });
   }
+  // Voice presence and table-size changes do not move the board, so sending the
+  // full state to everyone would be pure waste.
+  if (result?.voiceOnly || result?.seatsOnly) return broadcastLobby(room);
   // A rejected move leaves the state untouched; resend so the client re-syncs.
   broadcastRoom(room);
+}
+
+function handleChat(socket, msg) {
+  const session = sessions.get(socket);
+  if (!session) return send(socket, { t: 'error', message: 'Join a game first.' });
+  const room = getRoom(session.roomCode);
+  const seat = room?.seatFor(session.playerId);
+  if (!room || !seat) return send(socket, { t: 'error', message: 'Your seat is gone.' });
+
+  const result = addChat(room, seat, msg);
+  if (!result.ok) return send(socket, { t: 'error', message: result.error });
+  broadcastChat(room, result.entry);
+}
+
+/**
+ * WebRTC signalling relay. The server passes offer/answer/ICE blobs between two
+ * players and stores nothing — it never touches the audio itself. Relaying SDP
+ * is a few hundred bytes, once per peer, so voice costs no server data beyond
+ * that handshake; the audio goes peer to peer.
+ */
+function handleVoice(socket, msg) {
+  const session = sessions.get(socket);
+  if (!session) return;
+  const room = getRoom(session.roomCode);
+  const from = room?.seatFor(session.playerId);
+  if (!room || !from) return;
+  if (!from.voice) return; // only players who asked for the microphone may signal
+
+  const to = room.seatFor(String(msg.to || ''));
+  if (!to || !to.socket) return;
+  if (to.id === from.id) return;
+
+  // Only relay the three things WebRTC negotiation needs.
+  const kind = ['offer', 'answer', 'ice', 'bye'].includes(msg.kind) ? msg.kind : null;
+  if (!kind) return;
+
+  send(to.socket, { t: 'voice', from: from.id, kind, payload: msg.payload ?? null });
 }
 
 function handleLeave(socket) {
@@ -271,7 +347,7 @@ wss.on('close', () => {
 
 server.listen(PORT, () => {
   console.log(`UNO server on http://localhost:${PORT}`);
-  console.log(`Max players per table: ${MAX_PLAYERS}`);
+  console.log(`Players per table: ${MIN_SEATS}-${MAX_SEATS}`);
 });
 
 process.on('SIGINT', () => server.close(() => process.exit(0)));

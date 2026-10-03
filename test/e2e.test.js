@@ -16,8 +16,10 @@ import {
   getRoom,
   addPlayer,
   applyAction,
+  addChat,
   viewForSeat,
   startIfReady,
+  detachSeat,
   sweep,
   removeSeat,
 } from '../server/rooms.js';
@@ -28,12 +30,24 @@ function client(roomCode, name) {
   const sock = new WebSocket(`ws://127.0.0.1:${PORT}/ws`);
   const inbox = [];
   const waiters = [];
+  let seen = 0;
 
   sock.on('message', (raw) => {
     const msg = JSON.parse(raw.toString());
+    const at = seen++;
+    // Non-enumerable so it never shows up in a JSON.stringify of the payload.
+    Object.defineProperty(msg, '__at', { value: at, enumerable: false });
     inbox.push(msg);
     for (let i = waiters.length - 1; i >= 0; i--) {
-      if (waiters[i].match(msg)) waiters.splice(i, 1)[0].resolve(msg);
+      const w = waiters[i];
+      if (at >= w.since && w.match(msg)) {
+        waiters.splice(i, 1)[0].resolve(msg);
+        // Consume it here too, or a later scan would hand out the same
+        // message a second time.
+        const at2 = inbox.indexOf(msg);
+        if (at2 >= 0) inbox.splice(at2, 1);
+        break;
+      }
     }
   });
 
@@ -42,23 +56,32 @@ function client(roomCode, name) {
     name,
     inbox,
     send: (m) => sock.send(JSON.stringify(m)),
-    /** Waits for the newest message matching a predicate. */
-    next(match, label = 'message') {
+/**
+     * Waits for the newest matching message that arrived after `since`.
+     * Pass mark() before triggering something to guarantee a fresh message and
+     * never a stale broadcast left over from an earlier step.
+     */
+    next(match, label = 'message', since = 0) {
       for (let i = inbox.length - 1; i >= 0; i--) {
-        if (match(inbox[i])) return Promise.resolve(inbox.splice(i, 1)[0]);
+        // Already-queued messages must respect `since` too, otherwise a stale
+        // broadcast gets mistaken for the one we just triggered.
+        if (inbox[i].__at >= since && match(inbox[i])) {
+          return Promise.resolve(inbox.splice(i, 1)[0]);
+        }
       }
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error(`timed out waiting for ${label}`)), 4000);
-        waiters.push({ match, resolve: (m) => { clearTimeout(timer); resolve(m); } });
+        waiters.push({ match, since, resolve: (m) => { clearTimeout(timer); resolve(m); } });
       });
     },
-    /** Throws away anything already queued, so the next wait() is for a NEW message. */
-    drain() {
-      inbox.length = 0;
+    mark() {
+      return seen;
     },
-    joined: () => api.next((m) => m.t === 'joined', 'joined'),
-    state: () => api.next((m) => m.t === 'state', 'state'),
-    error: () => api.next((m) => m.t === 'error', 'error'),
+    joined: (since) => api.next((m) => m.t === 'joined', 'joined', since),
+    state: (since) => api.next((m) => m.t === 'state', 'state', since),
+    error: (since) => api.next((m) => m.t === 'error', 'error', since),
+    chat: (since) => api.next((m) => m.t === 'chat', 'chat', since),
+    voice: (since) => api.next((m) => m.t === 'voice', 'voice', since),
     async open() {
       if (sock.readyState === WebSocket.OPEN) return;
       await new Promise((resolve, reject) => {
@@ -203,7 +226,8 @@ test('a second player joins by code and the game deals', async () => {
   a.send({ t: 'create', name: 'Ana' });
   const joinedA = await a.joined();
 
-  a.drain();
+  await a.state(); // the host's own lobby broadcast: the only state queued so far
+  const at = a.mark(); // anything the host sees from here on is post-join
   b.send({ t: 'join', code: joinedA.code, name: 'Bo' });
   const joinedB = await b.joined();
 
@@ -215,7 +239,7 @@ test('a second player joins by code and the game deals', async () => {
   assert.notEqual(joinedB.view.top.kind, 'wild', 'the flip is never a wild');
 
   // The host is told about the deal through a follow-up state.
-  const hostView = await a.state();
+  const hostView = await a.state(at);
   assert.equal(hostView.view.waiting, false);
   assert.equal(hostView.view.hand.length, 7, 'the host was dealt in too');
   assert.equal(hostView.view.top.id, joinedB.view.top.id, 'both see the same table card');
@@ -232,12 +256,13 @@ test('a third player is refused', async () => {
 
   a.send({ t: 'create', name: 'Ana' });
   const code = (await a.joined()).code;
-  a.drain();
+  await a.state(); // the host's own lobby broadcast: the only state queued so far
+  const at = a.mark(); // anything the host sees from here on is post-join
   b.send({ t: 'join', code, name: 'Bo' });
   await b.joined();
   c.send({ t: 'join', code, name: 'Cy' });
   const err = await c.error();
-  assert.match(err.message, /two players/i);
+  assert.match(err.message, /set for 2 players/i);
 
   await Promise.all([a.close(), b.close(), c.close()]);
 });
@@ -253,7 +278,7 @@ test('an unknown code is reported clearly', async () => {
 test('a name is trimmed, capped and stripped of control characters', async () => {
   const a = client('x', 'Ana');
   await a.open();
-  a.send({ t: 'create', name: '  Ana   ' });
+  a.send({ t: 'create', name: '  Ana\u0000\u001b  ' });
   const msg = await a.joined();
   assert.equal(msg.view.players[0].name, 'Ana');
   await a.close();
@@ -294,11 +319,12 @@ test('two clients play real moves against each other', async () => {
 
   a.send({ t: 'create', name: 'Ana' });
   const code = (await a.joined()).code;
-  a.drain();
+  await a.state(); // the host's own lobby broadcast: the only state queued so far
+  const at = a.mark(); // anything the host sees from here on is post-join
   b.send({ t: 'join', code, name: 'Bo' });
   await b.joined();
 
-  let va = (await a.state()).view;
+  let va = (await a.state(at)).view;
   let vb = (await b.state()).view;
   assert.equal(va.waiting, false, 'the host is in the game');
   assert.equal(vb.waiting, false);
@@ -306,13 +332,13 @@ test('two clients play real moves against each other', async () => {
   for (let step = 0; step < 16; step++) {
     const aMoves = va.turn === va.myIndex;
     const who = aMoves ? a : b;
-    // Clear both inboxes: the only traffic left will be this move's broadcast.
-    a.drain();
-    b.drain();
+    // Mark both clients so each waits only for this move's broadcast.
+    const ma = a.mark();
+    const mb = b.mark();
     takeTurn(who, aMoves ? va : vb);
 
-    const aUpdate = await a.state();
-    const bUpdate = await b.state();
+    const aUpdate = await a.state(ma);
+    const bUpdate = await b.state(mb);
     va = aUpdate.view;
     vb = bUpdate.view;
     assert.equal(va.top.id, vb.top.id, `step ${step}: the clients disagree about the table`);
@@ -340,7 +366,8 @@ test('an opponent card id never crosses the wire', async () => {
 
   a.send({ t: 'create', name: 'Ana' });
   const code = (await a.joined()).code;
-  a.drain();
+  await a.state(); // the host's own lobby broadcast: the only state queued so far
+  const at = a.mark(); // anything the host sees from here on is post-join
   b.send({ t: 'join', code, name: 'Bo' });
   const joinedB = await b.joined();
 
@@ -348,7 +375,7 @@ test('an opponent card id never crosses the wire', async () => {
   const boCardIds = joinedB.view.hand.map((c) => c.id);
   assert.equal(boCardIds.length, 7);
 
-  const update = await a.state();
+  const update = await a.state(at);
   const wire = JSON.stringify(update);
   for (const id of boCardIds) {
     assert.equal(wire.includes(id), false, `Bo's card ${id} leaked to Ana`);
@@ -367,7 +394,8 @@ test('an illegal move is refused and changes nothing', async () => {
 
   a.send({ t: 'create', name: 'Ana' });
   const code = (await a.joined()).code;
-  a.drain();
+  await a.state(); // the host's own lobby broadcast: the only state queued so far
+  const at = a.mark(); // anything the host sees from here on is post-join
   b.send({ t: 'join', code, name: 'Bo' });
   const joinedB = await b.joined();
 
@@ -377,7 +405,7 @@ test('an illegal move is refused and changes nothing', async () => {
     b.send({ t: 'action', action: 'play', cardId: notMine.id });
     const err = await b.error();
     assert.ok(err.message, 'the client is told why');
-    const after = await a.state();
+    const after = await a.state(at);
     assert.equal(after.view.players.find((p) => p.id === joinedB.you).count, joinedB.view.players.find((p) => p.id === joinedB.you).count);
   }
 
@@ -398,17 +426,18 @@ test('a dropped player keeps their seat and gets their hand back', async () => {
 
   a.send({ t: 'create', name: 'Ana' });
   const code = (await a.joined()).code;
-  a.drain();
+  await a.state(); // the host's own lobby broadcast: the only state queued so far
+  const at = a.mark(); // anything the host sees from here on is post-join
   b.send({ t: 'join', code, name: 'Bo' });
   const joinedB = await b.joined();
   const handBefore = joinedB.view.hand.map((c) => c.id).sort();
-  await a.state(); // consume the post-join broadcast
+  await a.state(at); // consume the post-join broadcast
 
   // B's connection drops. The server notices asynchronously, so poll briefly.
   await b.close();
   let bSeat = null;
   for (let tries = 0; tries < 25; tries++) {
-    const after = await a.state();
+    const after = await a.state(at);
     bSeat = after.view.players.find((p) => p.id === joinedB.you);
     if (bSeat.connected === false) break;
     await new Promise((r) => setTimeout(r, 40));
@@ -456,7 +485,8 @@ test('leaving removes the seat, and an empty room is deleted', async () => {
 
   a.send({ t: 'create', name: 'Ana' });
   const code = (await a.joined()).code;
-  a.drain();
+  await a.state(); // the host's own lobby broadcast: the only state queued so far
+  const at = a.mark(); // anything the host sees from here on is post-join
   b.send({ t: 'join', code, name: 'Bo' });
   await b.joined();
 
@@ -479,7 +509,8 @@ test('an unknown action is rejected without side effects', async () => {
   await b.open();
   a.send({ t: 'create', name: 'Ana' });
   const code = (await a.joined()).code;
-  a.drain();
+  await a.state(); // the host's own lobby broadcast: the only state queued so far
+  const at = a.mark(); // anything the host sees from here on is post-join
   b.send({ t: 'join', code, name: 'Bo' });
   await b.joined();
 
@@ -504,7 +535,7 @@ test('a room holds at most two seats', () => {
   const room = createRoom({});
   assert.ok(addPlayer(room, { name: 'A' }).seat);
   assert.ok(addPlayer(room, { name: 'B' }).seat);
-  assert.match(addPlayer(room, { name: 'C' }).error, /two players/);
+  assert.match(addPlayer(room, { name: 'C' }).error, /set for 2 players/);
   assert.equal(room.seats.length, 2);
 });
 
@@ -650,4 +681,349 @@ test('every card is accounted for after several rounds', () => {
     }
     applyAction(room, a, { action: 'nextRound' });
   }
+});
+
+// ── More than two players ─────────────────────────────
+
+/**
+ * Creates a table, seats everyone, and returns one current view per client.
+ *
+ * Every client's queued broadcasts are left in place and then read once, so the
+ * returned views are the settled current state. Tests that act afterwards mark
+ * first and wait for the message that action causes, which is what keeps them
+ * free of stale-broadcast races.
+ */
+async function seatTable(names, maxPlayers) {
+  const [first, ...rest] = names;
+  const host = client('x', first);
+  await host.open();
+  host.send({ t: 'create', name: first, maxPlayers });
+  const joined = await host.joined();
+
+  const guests = [];
+  for (const name of rest) {
+    const c = client('x', name);
+    await c.open();
+    c.send({ t: 'join', code: joined.code, name });
+    await c.joined();
+    guests.push(c);
+  }
+
+  const all = [host, ...guests];
+  await new Promise((r) => setTimeout(r, 80)); // let every broadcast land
+  const views = [];
+  for (const c of all) views.push((await c.state()).view);
+  for (const c of all) c.mark(); // everything read so far is now "old"
+  return { host, guests, all, views, code: joined.code };
+}
+
+/** Marks every client, runs the action, then returns each client's new state. */
+async function actAndSync(clients, actor, msg) {
+  const marks = clients.map((c) => c.mark());
+  actor.send(msg);
+  const out = [];
+  for (let i = 0; i < clients.length; i++) out.push((await clients[i].state(marks[i])).view);
+  return out;
+}
+
+/** One legal move for whoever is on turn. */
+function moveFor(view) {
+  const i = view.myIndex;
+  if (view.pendingDraw && view.pendingDraw.targetIndex === i) return { t: 'action', action: 'accept' };
+  if (view.unoOpen && view.unoOpen.includes(i)) return { t: 'action', action: 'uno' };
+  const card = chooseCard(view);
+  if (card) {
+    return {
+      t: 'action',
+      action: 'play',
+      cardId: card.id,
+      color: card.color === 'W' ? 'R' : undefined,
+    };
+  }
+  if (view.drawn) return { t: 'action', action: 'pass' };
+  return { t: 'action', action: 'draw' };
+}
+
+test('a table can be set for more than two players and deals for all of them', async () => {
+  const { all, views } = await seatTable(['Ana', 'Bo', 'Cy', 'Dee'], 4);
+
+  for (const v of views) {
+    assert.equal(v.waiting, false, 'the game started once the table filled');
+    assert.equal(v.hand.length, 7, 'seven cards each');
+    assert.equal(v.players.length, 4, 'four players at the table');
+    assert.equal(v.players.reduce((n, p) => n + p.count, 0), 28, '28 cards in hands');
+  }
+
+  // Everybody is looking at the same table.
+  assert.equal(new Set(views.map((v) => v.top.id)).size, 1, 'one card on the table for all');
+  assert.equal(new Set(views.map((v) => v.turn)).size, 1, 'one player on turn for all');
+
+  // Each client is sent its own cards in full and everybody else's as counts.
+  for (const v of views) {
+    const mine = v.players.find((p) => p.isMe);
+    assert.deepEqual(mine.hand, v.hand, 'my hand is the one I am shown');
+    for (const other of v.players.filter((p) => !p.isMe)) {
+      assert.equal(other.hand.length, other.count);
+      for (const c of other.hand) {
+        assert.deepEqual(Object.keys(c), ['hidden'], 'a hidden card carries nothing but a marker');
+      }
+    }
+  }
+
+  await Promise.all(all.map((c) => c.close()));
+});
+
+test('four players can play real moves and everyone stays in sync', async () => {
+  const { all, views: settled } = await seatTable(['Ana', 'Bo', 'Cy', 'Dee'], 4);
+  let views = settled;
+
+  for (let step = 0; step < 12; step++) {
+    if (views[0].phase !== 'playing') break;
+    const idx = views[0].turn;
+    if (views[0].unoOpen && views[0].unoOpen.includes(idx)) {
+      views = await actAndSync(all, all[idx], { t: 'action', action: 'uno' });
+      continue;
+    }
+    views = await actAndSync(all, all[idx], moveFor(views[idx]));
+
+    // One shared truth: same table card, same turn, same counts, everywhere.
+    for (let i = 1; i < all.length; i++) {
+      assert.equal(views[i].top.id, views[0].top.id, `step ${step}: table card disagrees`);
+      assert.equal(views[i].turn, views[0].turn, `step ${step}: turn disagrees`);
+      assert.equal(views[i].drawCount, views[0].drawCount, `step ${step}: draw pile disagrees`);
+      assert.equal(
+        views[i].players.map((p) => p.count).join(),
+        views[0].players.map((p) => p.count).join(),
+        `step ${step}: hand sizes disagree`,
+      );
+    }
+  }
+
+  await Promise.all(all.map((c) => c.close()));
+});
+
+test('a host can start early before the table is full', async () => {
+  const host = client('x', 'Ana');
+  const guest = client('x', 'Bo');
+  await host.open();
+  await guest.open();
+
+  host.send({ t: 'create', name: 'Ana', maxPlayers: 6 });
+  const joined = await host.joined();
+  await host.state();
+  assert.equal(joined.view.canStart, false, 'one player is not enough');
+
+  guest.send({ t: 'join', code: joined.code, name: 'Bo' });
+  await guest.joined();
+  await guest.state();
+  await new Promise((r) => setTimeout(r, 60));
+
+  const lobby = (await host.state()).view;
+  assert.equal(lobby.waiting, true, 'the table is not full, so no deal yet');
+  assert.equal(lobby.canStart, true, 'but the host may start early');
+
+  const [started] = await actAndSync([host], host, { t: 'action', action: 'start' });
+  assert.equal(started.waiting, false, 'the host started the game');
+  assert.equal(started.players.length, 2);
+
+  await Promise.all([host.close(), guest.close()]);
+});
+
+test('only the host can start, and not twice', async () => {
+  const { host, guests } = await seatTable(['Ana', 'Bo'], 6);
+  const [guest] = guests;
+
+  guest.send({ t: 'action', action: 'start' });
+  assert.match((await guest.error(guest.mark())).message, /Only the host/);
+
+  await actAndSync([host], host, { t: 'action', action: 'start' });
+  host.send({ t: 'action', action: 'start' });
+  assert.match((await host.error(host.mark())).message, /already started/);
+
+  await Promise.all([host.close(), guest.close()]);
+});
+
+test('the host can resize the table before the deal', async () => {
+  const host = client('x', 'Ana');
+  await host.open();
+  host.send({ t: 'create', name: 'Ana', maxPlayers: 2 });
+  await host.joined();
+  await host.state();
+
+  let [v] = await actAndSync([host], host, { t: 'action', action: 'addSeats', maxPlayers: 5 });
+  assert.equal(v.maxPlayers, 5);
+
+  [v] = await actAndSync([host], host, { t: 'action', action: 'addSeats', maxPlayers: 99 });
+  assert.equal(v.maxPlayers, 6, 'clamped to the maximum');
+
+  [v] = await actAndSync([host], host, { t: 'action', action: 'addSeats', maxPlayers: 'lots' });
+  assert.equal(v.maxPlayers, 2, 'nonsense falls back to two');
+
+  await host.close();
+});
+
+test('a dropped player is shown as gone and the game keeps working', async () => {
+  const { host, guests, views } = await seatTable(['Ana', 'Bo'], 2);
+  const [guest] = guests;
+  const guestId = views[0].players.find((p) => !p.isMe).id;
+
+  const mark = host.mark();
+  await guest.close();
+  let after = null;
+  for (let tries = 0; tries < 25; tries++) {
+    after = (await host.state(mark)).view;
+    if (after.players.find((p) => p.id === guestId).connected === false) break;
+    await new Promise((r) => setTimeout(r, 40));
+  }
+  assert.equal(after.players.find((p) => p.id === guestId).connected, false, 'shown as gone');
+
+  await host.close();
+});
+
+test('dropping the player on turn hands the turn to the next seat', () => {
+  const room = createRoom({ maxPlayers: 2 });
+  const a = addPlayer(room, { name: 'Ana' }).seat;
+  const b = addPlayer(room, { name: 'Bo' }).seat;
+  startIfReady(room);
+
+  // Put the turn on Bo, then drop him.
+  room.state.turn = 1;
+  const before = room.state.turn;
+  detachSeat(room, b);
+  assert.notEqual(room.state.turn, before, 'the turn moved off the ghost seat');
+  assert.equal(room.state.players.find((p) => p.id === a.id).connected, true);
+});
+
+// ── Chat and stickers ─────────────────────────────────
+test('chat reaches everyone as its own small message', async () => {
+  const { all } = await seatTable(['Ana', 'Bo'], 2);
+  const [host, guest] = all;
+
+  const marks = all.map((c) => c.mark());
+  host.send({ t: 'chat', text: 'good luck' });
+
+  const [hMsg, gMsg] = await Promise.all([host.chat(marks[0]), guest.chat(marks[1])]);
+  assert.equal(hMsg.entry.text, 'good luck');
+  assert.equal(gMsg.entry.name, 'Ana');
+  assert.equal(gMsg.entry.from, hMsg.entry.from, 'both see the same sender');
+
+  await Promise.all(all.map((c) => c.close()));
+});
+
+test('a sticker is a chat line without text, and blank messages are refused', async () => {
+  const { all } = await seatTable(['Ana', 'Bo'], 2);
+  const [host, guest] = all;
+
+  const gm = guest.mark();
+  host.send({ t: 'chat', sticker: 'fire' });
+  const msg = await guest.chat(gm);
+  assert.equal(msg.entry.sticker, 'fire');
+  assert.equal(msg.entry.text, null);
+
+  host.send({ t: 'chat', text: '   ' });
+  assert.match((await host.error(host.mark())).message, /Say something/);
+
+  await Promise.all(all.map((c) => c.close()));
+});
+
+test('a very long chat message is truncated rather than relayed', async () => {
+  const { all } = await seatTable(['Ana', 'Bo'], 2);
+  const [host, guest] = all;
+
+  const gm = guest.mark();
+  host.send({ t: 'chat', text: 'x'.repeat(5000) });
+  assert.equal((await guest.chat(gm)).entry.text.length, 400, 'cut down to 400 characters');
+
+  await Promise.all(all.map((c) => c.close()));
+});
+
+test('chat history stays bounded no matter how much is said', () => {
+  const room = createRoom({ maxPlayers: 6 });
+  const seat = addPlayer(room, { name: 'Ana' }).seat;
+  for (let i = 0; i < 500; i++) addChat(room, seat, { text: `line ${i}` });
+  const view = viewForSeat(room, seat);
+  assert.ok(view.chat.length <= 40, `history stayed bounded, got ${view.chat.length}`);
+  assert.equal(view.chat.at(-1).text, 'line 499', 'the newest line is the one kept');
+});
+
+test('a player cannot speak as somebody else, and stickers are length-capped', () => {
+  const room = createRoom({ maxPlayers: 6 });
+  const ana = addPlayer(room, { name: 'Ana' }).seat;
+  const bo = addPlayer(room, { name: 'Bo' }).seat;
+
+  const sent = addChat(room, bo, { text: 'hi' });
+  assert.equal(sent.entry.name, 'Bo', 'the name comes from the seat, not the payload');
+  assert.equal(sent.entry.from, bo.id);
+
+  const sticker = addChat(room, ana, { sticker: 'z'.repeat(50) });
+  assert.equal(sticker.entry.sticker.length <= 8, true, 'sticker ids are capped');
+
+  assert.equal(addChat(room, ana, { text: '' }).error, 'Say something first.');
+});
+
+// ── Voice signalling ──────────────────────────────────
+test('voice is opt-in, and signals only reach peers who asked for it', async () => {
+  const { all, views } = await seatTable(['Ana', 'Bo'], 2);
+  const [host, guest] = all;
+  const hostId = views[0].you;
+  const guestId = views[0].players.find((p) => !p.isMe).id;
+
+  // Nobody is on voice yet, and that is public information.
+  assert.equal(views.flatMap((v) => v.players).every((p) => p.voice === false), true);
+
+  // A muted player cannot initiate signalling.
+  guest.send({ t: 'voice', to: hostId, kind: 'offer', payload: { sdp: 'x' } });
+  await new Promise((r) => setTimeout(r, 120));
+  assert.equal(host.inbox.filter((m) => m.t === 'voice').length, 0, 'no relay from a muted player');
+
+  // actAndSync already consumed the new state, so use what it returned.
+  let [onHost] = await actAndSync([host], host, { t: 'action', action: 'voice', enabled: true });
+  assert.equal(onHost.players.find((p) => p.isMe).voice, true, 'the host sees their mic as on');
+
+  [onHost] = await actAndSync([host, guest], guest, { t: 'action', action: 'voice', enabled: true });
+  assert.equal(
+    onHost.players.find((p) => p.id === guestId).voice,
+    true,
+    'the other player sees the guest on voice',
+  );
+
+  const rm = host.mark();
+  guest.send({ t: 'voice', to: hostId, kind: 'offer', payload: { sdp: 'fake-sdp' } });
+  const relayed = await host.voice(rm);
+  assert.equal(relayed.kind, 'offer');
+  assert.equal(relayed.payload.sdp, 'fake-sdp');
+  assert.equal(relayed.from, guestId, 'the relay identifies the sender');
+
+  const bm = guest.mark();
+  host.send({ t: 'voice', to: guestId, kind: 'answer', payload: { sdp: 'y' } });
+  assert.equal((await guest.voice(bm)).kind, 'answer');
+
+  // Unknown peers and unknown signal kinds are dropped, not forwarded.
+  host.send({ t: 'voice', to: 'nobody', kind: 'offer', payload: {} });
+  host.send({ t: 'voice', to: guestId, kind: 'nonsense', payload: {} });
+  await new Promise((r) => setTimeout(r, 120));
+  assert.equal(guest.inbox.filter((m) => m.t === 'voice').length, 0);
+
+  await Promise.all(all.map((c) => c.close()));
+});
+
+test('a seat holds nothing but identity and presence flags', () => {
+  const room = createRoom({ maxPlayers: 6 });
+  const a = addPlayer(room, { name: 'Ana' }).seat;
+  const b = addPlayer(room, { name: 'Bo' }).seat;
+  a.voice = true;
+  b.voice = true;
+
+  // SDP, ICE candidates and media never touch the server: a seat is a handful
+  // of scalars, and voice is a single boolean on it.
+  for (const seat of room.seats) {
+    assert.deepEqual(
+      Object.keys(seat).sort(),
+      ['connected', 'droppedAt', 'id', 'name', 'socket', 'token', 'voice'],
+    );
+  }
+  const withoutSockets = JSON.stringify(room.seats, (k, v) => (k === 'socket' ? undefined : v));
+  assert.equal(withoutSockets.includes('sdp'), false);
+  assert.equal(withoutSockets.includes('track'), false);
+  assert.ok(withoutSockets.length < 400, 'seat data stays tiny');
 });
