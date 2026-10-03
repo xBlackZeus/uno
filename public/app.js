@@ -6,7 +6,6 @@
   const $ = (sel) => document.querySelector(sel);
   const COLOR_ORDER = ['R', 'Y', 'G', 'B'];
   const COLOR_LABEL = { R: 'Red', Y: 'Yellow', G: 'Green', B: 'Blue' };
-  const KEYS = ['r', 'y', 'g', 'b'];
 
   const el = {
     home: $('#home'),
@@ -25,6 +24,7 @@
     codeChip: $('#codeChip'),
     opponent: $('#opponent'),
     drawPile: $('#drawPile'),
+    drawPileArt: $('#drawPileArt'),
     drawCount: $('#drawCount'),
     topCard: $('#topCard'),
     turnBanner: $('#turnBanner'),
@@ -247,38 +247,12 @@
   // ── Card rendering ───────────────────────────────────
   function cardEl(card, { mini = false, hidden = false } = {}) {
     const node = document.createElement('div');
-    node.className = 'card';
+    node.className = hidden ? 'card face-down' : 'card';
     if (mini) node.classList.add('mini');
-
-    if (hidden) {
-      node.classList.add('face-down');
-      return node;
+    node.append(hidden ? UNOCards.backSvg() : UNOCards.cardSvg(card, { mini }));
+    if (!hidden && card.color === 'W' && card.chosen) {
+      node.dataset.chosen = UNOCards.NAME[card.chosen];
     }
-
-    const colour = card.color === 'W' ? (card.chosen || 'W') : card.color;
-    node.classList.add(colour.toLowerCase());
-    node.dataset.color = colour;
-
-    if (card.kind === 'wild' || card.kind === 'wild4') {
-      node.classList.add('wild');
-      const stripe = document.createElement('div');
-      stripe.className = 'wild-stripe';
-      const label = document.createElement('span');
-      label.textContent = card.kind === 'wild4' ? 'WILD +4' : 'WILD';
-      stripe.append(label);
-      node.append(stripe);
-      if (card.chosen) node.dataset.chosen = COLOR_LABEL[card.chosen];
-      return node;
-    }
-
-    const mark = document.createElement('span');
-    mark.className = 'mark';
-    mark.textContent = COLOR_LABEL[colour].slice(0, 3).toUpperCase();
-    const big = document.createElement('span');
-    big.className = card.kind === 'num' ? 'num' : 'big';
-    big.textContent =
-      card.kind === 'num' ? card.num : card.kind === 'skip' ? '⊘' : card.kind === 'rev' ? '⇄' : '+2';
-    node.append(mark, big);
     return node;
   }
 
@@ -343,6 +317,9 @@
     el.topCard.replaceChildren();
     if (v.top) el.topCard.append(cardEl(v.top));
     el.drawCount.textContent = v.drawCount;
+    if (el.drawPileArt && !el.drawPileArt.childElementCount) {
+      el.drawPileArt.append(UNOCards.backSvg());
+    }
     const myTurn = v.turn === myIndex && v.phase === 'playing';
     el.drawPile.disabled = !myTurn || !v.legal.includes('draw');
 
