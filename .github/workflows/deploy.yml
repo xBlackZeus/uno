@@ -38,7 +38,11 @@ jobs:
           printf 'window.UNO_SERVER_URL = "%s";\n' "$URL" > public/config.js
           echo "server: ${URL:-same-origin}"
 
+      # enablement: lets a fork enable its own Pages, so the workflow does not
+      # fail on a repo where Pages has never been switched on.
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true
       - uses: actions/upload-pages-artifact@v3
         with:
           path: public
