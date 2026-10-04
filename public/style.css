@@ -1,20 +1,84 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   UNO — stylesheet
+
+   Organisation:
+     1. Tokens          colours, type scale, card metrics, motion timings
+     2. Base + reset
+     3. Buttons + inputs
+     4. Home / waiting
+     5. Table + seats
+     6. Cards
+     7. Hand + actions
+     8. Dock (voice / sound / chat)
+     9. Chat
+    10. Overlays
+    11. Motion
+    12. Effects (canvas, toasts)
+    13. Responsive: tablet, portrait phone, landscape phone, desktop
+
+   Two rules hold the whole file together:
+
+   • Motion timings live in :root and mirror UNOMotion.duration exactly, so a
+     CSS transition and a JS animation of the "same" effect cannot drift apart.
+
+   • Hover styling only ever appears inside `@media (hover: hover)`. On a
+     touchscreen, :hover sticks after a tap, which makes a card look selected
+     when it is not — so touch devices get an explicit .is-selected class
+     instead and never a hover rule at all.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── 1. Tokens ───────────────────────────────────────────────────────────── */
 :root {
-  --felt-1: #123c31;
-  --felt-2: #0a241d;
-  --ink: #f2f5f4;
+  --felt-1: #14453a;
+  --felt-2: #08211b;
+  --ink: #f4f7f6;
   --muted: #9db3ad;
+
   --red: #e63946;
   --yellow: #f4a300;
-  --green: #2a9d5c;
-  --blue: #2f6fd0;
+  --green: #2fb872;
+  --blue: #3b7ce0;
   --wild: #23262e;
-  --panel: rgba(0, 0, 0, 0.28);
+
+  --panel: rgba(0, 0, 0, 0.3);
+  --panel-solid: #123029;
   --stroke: rgba(255, 255, 255, 0.14);
+  --stroke-soft: rgba(255, 255, 255, 0.07);
+
   --radius: 14px;
+  --radius-lg: 22px;
+
+  /* Card metrics. Every layout decision about card size reads these, so the
+     responsive sections only ever change the two numbers below. */
   --card-w: 84px;
   --card-h: 118px;
+  --card-top-w: 96px;
+  --card-top-h: 134px;
+  --card-mini-w: 40px;
+  --card-mini-h: 56px;
+  --hand-gap: 8px;
+
+  /* Mirrors UNOMotion.duration. Keep the two in step. */
+  --t-instant: 90ms;
+  --t-fast: 150ms;
+  --t-base: 240ms;
+  --t-slow: 340ms;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* Depth. Cards sit on a table, so they need a real shadow stack. */
+  --lift-1: 0 2px 4px rgba(0, 0, 0, 0.3);
+  --lift-2: 0 6px 14px rgba(0, 0, 0, 0.38);
+  --lift-3: 0 14px 30px rgba(0, 0, 0, 0.5);
+
+  --dock-h: 60px;
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+  --safe-t: env(safe-area-inset-top, 0px);
 }
 
+/* ── 2. Base ─────────────────────────────────────────────────────────────── */
 * { box-sizing: border-box; }
 
 html, body {
@@ -24,29 +88,51 @@ html, body {
   color: var(--ink);
   font: 16px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   -webkit-text-size-adjust: 100%;
+  /* Stops the rubber-band pull-to-refresh that makes a card drag feel broken. */
+  overscroll-behavior-y: contain;
 }
+
+body { min-height: 100dvh; }
 
 .hidden { display: none !important; }
 .muted { color: var(--muted); }
-.error { color: #ff8f8f; min-height: 1.4em; margin: 12px 0 0; }
+.error { color: #ff9d9d; min-height: 1.4em; margin: 12px 0 0; }
 
-/* ── Home / waiting ─────────────────────────────────── */
+/* Visible only to assistive technology. */
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Focus is never removed, only restyled — keyboard players need to see it. */
+:where(button, input, [tabindex]):focus-visible {
+  outline: 3px solid var(--yellow);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
 .screen {
-  min-height: 100vh;
   min-height: 100dvh;
   display: grid;
   place-items: center;
-  padding: 24px;
+  padding: calc(20px + var(--safe-t)) 20px calc(20px + var(--safe-b));
 }
 
+/* ── 3. Buttons + inputs ─────────────────────────────────────────────────── */
 .home-card {
   width: min(520px, 100%);
   background: var(--panel);
   border: 1px solid var(--stroke);
-  border-radius: 22px;
+  border-radius: var(--radius-lg);
   padding: 32px 28px;
   text-align: center;
   backdrop-filter: blur(8px);
+  box-shadow: var(--lift-3);
 }
 
 .logo {
@@ -83,12 +169,14 @@ input {
   border-radius: 11px;
   font-family: inherit;
 }
-input:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
+input::placeholder { color: #6f8680; }
 #codeInput { text-transform: uppercase; letter-spacing: 0.3em; font-weight: 700; text-align: center; }
 
 .btn {
   width: 100%;
   margin-top: 14px;
+  /* 48px, not 44: this is the primary action on the whole home screen. */
+  min-height: 48px;
   padding: 14px 18px;
   font: inherit;
   font-weight: 700;
@@ -97,30 +185,56 @@ input:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
   border: 1px solid var(--stroke);
   border-radius: 12px;
   cursor: pointer;
-  transition: transform 0.06s ease, background 0.15s ease;
+  touch-action: manipulation; /* kills the 300ms double-tap delay */
+  transition: transform var(--t-instant) ease, background var(--t-fast) ease, filter var(--t-fast) ease;
 }
 .btn:hover { background: rgba(255, 255, 255, 0.15); }
-.btn:active { transform: translateY(1px); }
-.btn.primary { background: linear-gradient(180deg, #2fbe6f, #1d8f4f); border-color: transparent; }
+.btn:active { transform: translateY(1px) scale(0.99); }
+.btn.primary { background: linear-gradient(180deg, #35c67d, #1d8f4f); border-color: transparent; }
 .btn.primary:hover { filter: brightness(1.08); }
 .btn.subtle { background: transparent; color: var(--muted); }
 
 .count-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
 .count {
-  padding: 11px 0;
+  min-height: 48px;
   font: 800 1.05rem/1 inherit;
   color: var(--muted);
   background: rgba(0, 0, 0, 0.3);
   border: 1px solid var(--stroke);
   border-radius: 10px;
   cursor: pointer;
-  transition: all 0.14s ease;
+  touch-action: manipulation;
+  transition: background var(--t-fast) ease, color var(--t-fast) ease, transform var(--t-instant) ease;
 }
-.count[aria-checked='true'] { background: var(--green); color: #04231a; border-color: transparent; }
+.count[aria-checked='true'] {
+  background: var(--green);
+  color: #04231a;
+  border-color: transparent;
+  /* Not colour alone: the selected seat is also bolder and slightly raised. */
+  transform: translateY(-2px);
+  box-shadow: var(--lift-2);
+}
+
 .home-card.wide { width: min(560px, 100%); }
-.seat-list { list-style: none; margin: 18px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; text-align: left; }
-.seat { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 10px; background: rgba(0, 0, 0, 0.22); font-size: 0.92rem; }
-.seat.empty { opacity: 0.5; }
+.seat-list {
+  list-style: none;
+  margin: 18px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+}
+.seat {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.22);
+  font-size: 0.92rem;
+}
+.seat.empty { opacity: 0.55; }
 .seat.mine { border: 1px solid var(--yellow); }
 .seat-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--green); flex: none; }
 .seat.empty .seat-dot { background: #6b8079; }
@@ -133,67 +247,104 @@ input:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
   letter-spacing: 0.16em;
   margin: 22px 0;
   color: var(--yellow);
+  text-shadow: 0 3px 12px rgba(244, 163, 0, 0.3);
 }
 
 .share-row { display: flex; gap: 8px; align-items: stretch; }
-.share-row input { flex: 1; font-size: 0.9rem; }
+.share-row input { flex: 1; font-size: 0.9rem; min-width: 0; }
 .share-row .btn { width: auto; margin-top: 0; white-space: nowrap; padding-inline: 16px; }
 
-/* ── Table ──────────────────────────────────────────── */
-#game { display: flex; flex-direction: column; min-height: 100vh; min-height: 100dvh; padding-bottom: env(safe-area-inset-bottom); }
-.play-area { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+/* ── 5. Table + seats ────────────────────────────────────────────────────── */
+#game {
+  display: flex;
+  flex-direction: column;
+  /* .screen sets place-items:center, which is also align-items:center — on a
+     column flex container that sizes the header, table and dock to their
+     content width and centres them, instead of stretching them to the viewport.
+     A 483px header strip in a 390px phone is what that produces. */
+  align-items: stretch;
+  justify-content: flex-start;
+  height: 100dvh; /* dvh, not vh: mobile browser chrome must not clip the dock */
+  padding-left: var(--safe-l);
+  padding-right: var(--safe-r);
+  overflow: hidden; /* the table scrolls internally; the page itself does not */
+}
+
+/* Every one of these is a flex item in a column, and a flex item's default
+   `min-width: auto` resolves to its min-content width — which is how a header
+   strip of nowrap scores ends up 483px wide inside a 390px phone. Because
+   #game clips its overflow, that overflow is invisible to the document's
+   scrollWidth and just gets cut off at the edges. `min-width: 0` is what lets
+   them shrink and hand the scrolling to .scores instead. */
+.bar,
+.play-area,
+.hand-area,
+.dock,
+.chat {
+  min-width: 0;
+}
 
 .bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--stroke);
-  flex-wrap: wrap;
+  padding: calc(8px + var(--safe-t)) 14px 8px;
+  border-bottom: 1px solid var(--stroke-soft);
+  flex: none;
 }
-.scores { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+
+.scores {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  min-width: 0;
+  -webkit-overflow-scrolling: touch;
+}
+.scores::-webkit-scrollbar { display: none; }
+
 .score {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
+  gap: 6px;
+  padding: 6px 11px;
   border-radius: 999px;
   background: rgba(0, 0, 0, 0.3);
   border: 1px solid transparent;
-  font-size: 0.92rem;
+  font-size: 0.88rem;
+  white-space: nowrap;
+  flex: none;
+  transition: border-color var(--t-base) ease, background var(--t-base) ease;
 }
-.score.active-turn { border-color: var(--yellow); }
-.score.offline { opacity: 0.45; }
+.score.active-turn { border-color: var(--yellow); background: rgba(244, 163, 0, 0.12); }
+.score.offline { opacity: 0.5; }
 .score .nm { font-weight: 700; }
 .score .pts { color: var(--yellow); font-weight: 800; font-variant-numeric: tabular-nums; }
-.score .cards { color: var(--muted); font-size: 0.78rem; }
+.score .cards { color: var(--muted); font-size: 0.76rem; }
 .score .sep { color: var(--muted); opacity: 0.6; }
-.score { gap: 6px; }
-.score .nm { white-space: nowrap; }
-.score .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
+.score .dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--green);
+  flex: none;
+}
 .score.offline .dot { background: #888; }
 
-.bar-right { display: flex; align-items: center; gap: 10px; }
-.chip-btn {
-  border: 1px solid var(--stroke);
-  color: var(--muted);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-family: inherit;
-}
-.chip-btn.on { color: var(--green); border-color: var(--green); }
-.chip-btn.muted { color: #ffb86b; border-color: #ffb86b; }
+.bar-right { display: flex; align-items: center; gap: 8px; flex: none; }
+
 .chip {
-  font: 700 0.78rem/1 ui-monospace, monospace;
+  font: 700 0.74rem/1 ui-monospace, monospace;
   letter-spacing: 0.1em;
   padding: 7px 10px;
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.08);
   color: var(--muted);
+  white-space: nowrap;
 }
+
 .linkish {
   position: relative;
   background: none;
@@ -201,57 +352,127 @@ input:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
   color: var(--green);
   font: inherit;
   font-size: 0.86rem;
+  font-weight: 700;
   cursor: pointer;
   text-decoration: underline;
-  padding: 4px;
+  /* Comfortable target even though the text itself is small. */
+  padding: 10px 8px;
+  min-height: 40px;
+  touch-action: manipulation;
+}
+.linkish.has-new::after {
+  content: '';
+  position: absolute;
+  top: 6px;
+  right: 2px;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--red);
+  box-shadow: 0 0 0 2px var(--felt-2);
+}
+
+.play-area {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0; /* without this the children refuse to shrink and the dock is pushed off */
 }
 
 .table {
   flex: 1 1 auto;
-  max-height: 460px;
+  min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 18px;
+  gap: 14px;
   align-content: center;
+  justify-items: center;
+  width: calc(100% - 24px);
   max-width: 1000px;
-  width: calc(100% - 32px);
-  min-height: 296px;
-  margin: 18px auto;
-  padding: 24px;
+  margin: 12px auto;
+  padding: 16px;
   border-radius: 26px;
   border: 1px solid rgba(255, 255, 255, 0.07);
   background:
-    radial-gradient(90% 70% at 50% 40%, rgba(255, 255, 255, 0.045), transparent 70%),
+    radial-gradient(90% 70% at 50% 40%, rgba(255, 255, 255, 0.05), transparent 70%),
     rgba(0, 0, 0, 0.22);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 18px 40px rgba(0, 0, 0, 0.28);
-}
-@media (min-width: 760px) {
-  .table { grid-template-columns: 210px 1fr; align-items: center; }
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), var(--lift-3);
+  overflow: hidden;
 }
 
-.opponents { display: flex; flex-wrap: wrap; gap: 14px; align-content: center; justify-content: center; }
+.opponents {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-content: center;
+  justify-content: center;
+  width: 100%;
+}
+
 .opponent {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  align-items: center;
+  gap: 4px;
   padding: 9px 11px;
-  border-radius: 12px;
-  background: rgba(0, 0, 0, 0.22);
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.26);
   border: 1px solid transparent;
   min-width: 0;
-  transition: border-color 0.2s ease, background 0.2s ease;
+  transition: border-color var(--t-base) ease, background var(--t-base) ease, transform var(--t-base) var(--ease-out);
 }
-.opponent.is-turn { border-color: var(--yellow); background: rgba(244, 163, 0, 0.1); }
+.opponent.is-turn {
+  border-color: var(--yellow);
+  background: rgba(244, 163, 0, 0.12);
+  transform: translateY(-2px);
+}
 .opponent.offline { opacity: 0.5; }
-.opponent .who { display: flex; align-items: center; gap: 6px; font-weight: 800; font-size: 0.92rem; }
-.opponent .mic { font-size: 0.78rem; }
-.opponent .fan { display: flex; flex-wrap: nowrap; margin-left: -12px; }
+
+.opponent .who {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 800;
+  font-size: 0.9rem;
+  max-width: 100%;
+}
+.opponent .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Speaking indicator: a ring that pulses while the peer is actually loud.
+   The mic glyph is always present in the DOM, so the state is carried by shape
+   and animation as well as by colour. */
+.opponent .mic {
+  font-size: 0.78rem;
+  line-height: 1;
+  opacity: 0.35;
+  transition: opacity var(--t-fast) ease;
+}
+.opponent.has-voice .mic { opacity: 1; }
+.opponent.is-speaking {
+  border-color: var(--green);
+  box-shadow: 0 0 0 3px rgba(47, 184, 114, 0.28);
+}
+.opponent.is-speaking .mic { opacity: 1; animation: speaking-pulse 900ms ease-in-out infinite; }
+
+.opponent .meta { color: var(--muted); font-size: 0.74rem; }
+/* A hand of 7 at full mini width is 280px, which is wider than the opponent
+   rail — so the fan overlaps itself instead. Bounded width for any hand size,
+   and it reads as a fan rather than a row. */
+.opponent .fan { display: flex; flex-wrap: nowrap; margin-left: calc(var(--card-mini-w) * -0.3); }
+.opponent .fan .card { margin-left: calc(var(--card-mini-w) * -0.62); }
 .opponent .fan .card:first-child { margin-left: 0; }
-.warn-uno { color: #ffb86b; font-size: 0.74rem; font-weight: 700; }
 
-.centre { display: flex; flex-direction: column; align-items: center; gap: 18px; }
+.warn-uno {
+  color: #ffc182;
+  font-size: 0.72rem;
+  font-weight: 700;
+  animation: warn-blink 1.4s ease-in-out infinite;
+}
 
-.pile-row { display: flex; align-items: center; gap: 26px; }
+.centre { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+
+.pile-row { display: flex; align-items: center; gap: 22px; }
+
 .pile {
   position: relative;
   width: var(--card-w);
@@ -261,10 +482,12 @@ input:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
   padding: 0;
   cursor: pointer;
   border-radius: 12px;
-  transition: transform 0.12s ease;
+  touch-action: manipulation;
+  transition: transform var(--t-fast) var(--ease-out);
 }
-.pile:hover:not(:disabled) { transform: translateY(-4px); }
-.pile:disabled { cursor: default; opacity: 0.55; }
+.pile:disabled { cursor: default; opacity: 0.5; }
+/* Disabled draw pile still needs to read as "not your move", not as broken. */
+.pile:disabled .pile-name { opacity: 0.4; }
 
 .pile-count {
   position: absolute;
@@ -275,30 +498,42 @@ input:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
   font: 800 0.76rem/1 ui-monospace, monospace;
   padding: 4px 7px;
   border-radius: 999px;
+  box-shadow: var(--lift-1);
 }
-.top-card-slot { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.pile-name {
+  position: absolute;
+  bottom: -20px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.66rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.top-card-slot { position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; padding-top: 4px; }
 .slot-label {
-  font-size: 0.7rem;
+  font-size: 0.66rem;
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--muted);
 }
 
-.linkish.has-new::after {
+/* The turn ring: a slow pulse around the current top card. Reads as "this is
+   where the game is right now" without any text. */
+.top-card-slot::after {
   content: '';
   position: absolute;
-  top: 2px;
-  right: -2px;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--red);
+  inset: 4px 0 20px;
+  border-radius: 16px;
+  border: 2px solid var(--yellow);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--t-base) ease;
 }
+.table.my-turn .top-card-slot::after { opacity: 0.55; animation: turn-ring 2.2s ease-in-out infinite; }
 
-.turn-banner { font-weight: 700; letter-spacing: 0.03em; min-height: 1.4em; text-align: center; }
-.turn-banner .warn { color: #ffb86b; }
 .chosen-chip {
-  /* Above the card: below it would sit on top of the "table" caption. */
   position: absolute;
   top: -10px;
   left: 50%;
@@ -310,72 +545,226 @@ input:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
   padding: 4px 8px;
   border-radius: 999px;
   white-space: nowrap;
+  box-shadow: var(--lift-1);
 }
-.top-card-slot { position: relative; padding-top: 6px; }
 
-/* ── Cards ──────────────────────────────────────────── */
+.turn-banner {
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  min-height: 1.4em;
+  text-align: center;
+  font-size: 0.95rem;
+  padding: 0 8px;
+}
+.turn-banner .warn { color: #ffc182; }
+
+/* ── 6. Cards ────────────────────────────────────────────────────────────── */
 .card {
+  position: relative;
   width: var(--card-w);
   height: var(--card-h);
-  position: relative;
   flex: none;
   user-select: none;
+  -webkit-user-select: none;
+  /* The whole card is one composited layer; only transform/opacity animate. */
+  will-change: transform;
   filter: drop-shadow(0 5px 10px rgba(0, 0, 0, 0.45));
-  transition: transform 0.12s ease, opacity 0.12s ease, filter 0.12s ease;
+  transition: transform var(--t-fast) var(--ease-out), opacity var(--t-fast) ease, filter var(--t-fast) ease;
 }
 .card-art { display: block; width: 100%; height: 100%; border-radius: 11px; }
-.card.mini { width: 40px; height: 56px; }
-.card.top { --card-w: 96px; --card-h: 134px; }
+.card.mini { width: var(--card-mini-w); height: var(--card-mini-h); }
+.card.top { width: var(--card-top-w); height: var(--card-top-h); }
 
-/* Unplayable cards are desaturated rather than faded, so the hand stays readable. */
-.card.dim { opacity: 0.6; filter: grayscale(0.8) drop-shadow(0 3px 6px rgba(0, 0, 0, 0.35)); }
-.card.dim:hover { transform: none; }
-.card:not(.dim):hover { transform: translateY(-10px); }
-.card.hot { transform: translateY(-16px); z-index: 5; }
+/* Unplayable cards desaturate rather than fade: the hand stays readable, and
+   the reason a card is inert is visible without being a text label. */
+.card.dim { opacity: 0.62; filter: grayscale(0.82) drop-shadow(0 3px 6px rgba(0, 0, 0, 0.35)); }
 
-/* The draw pile is a real card back now, so it needs no gradient. */
+.card:hover { transform: translateY(-10px); }
+
+/* Selection. Applied on touch as well as hover, because hover is not available
+   there — and it is the only thing that makes a chosen card obvious. */
+.card.is-selected {
+  transform: translateY(-16px);
+  z-index: 5;
+  filter: drop-shadow(0 14px 22px rgba(0, 0, 0, 0.5)) drop-shadow(0 0 10px rgba(244, 163, 0, 0.55));
+}
+.card.is-selected::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 14px;
+  border: 2px solid var(--yellow);
+  pointer-events: none;
+}
+
+/* The FLIP ghost that flies between hand and table. */
+.card-ghost {
+  filter: drop-shadow(0 10px 20px rgba(0, 0, 0, 0.55));
+  will-change: transform, opacity;
+}
+
 .pile-back {
   display: block;
   width: 100%;
   height: 100%;
   filter: drop-shadow(0 5px 12px rgba(0, 0, 0, 0.5));
 }
-.pile-back .card-art { border-radius: 12px; }
 
-/* ── Hand + actions ─────────────────────────────────── */
-.hand-area { padding: 4px 12px 18px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+/* ── 7. Hand + actions ───────────────────────────────────────────────────── */
+.hand-area {
+  flex: none;
+  padding: 4px 12px 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
 .log-strip {
-  min-height: 1.5em;
+  min-height: 1.4em;
   color: var(--muted);
-  font-size: 0.86rem;
+  font-size: 0.84rem;
   text-align: center;
   padding: 0 8px;
+  /* One line, ellipsised: a long log message must not push the cards down. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
-.hand { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; padding-top: 16px; min-height: calc(var(--card-h) + 16px); }
-.hand .card { cursor: pointer; transition: transform 0.12s ease, opacity 0.12s ease; }
-.hand .card:not(.dim):hover { transform: translateY(-10px); }
 
-.actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; min-height: 46px; }
-.actions .btn { width: auto; margin-top: 0; padding: 11px 20px; }
-.act-uno { background: linear-gradient(180deg, #f4c400, #d79c00); color: #2a2000; border-color: transparent; }
+.hand {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--hand-gap);
+  padding-top: 18px; /* room for the lift, so a raised card is not clipped */
+  min-height: calc(var(--card-h) + 18px);
+  width: 100%;
+  max-width: 100%;
+}
+.hand .card { cursor: pointer; touch-action: manipulation; }
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+  min-height: 50px;
+  align-items: center;
+  width: 100%;
+}
+.actions .btn {
+  width: auto;
+  margin-top: 0;
+  padding: 12px 22px;
+  /* 48px tall: these are the buttons a player hits under time pressure. */
+  min-height: 48px;
+  font-size: 0.98rem;
+}
+.act-uno {
+  background: linear-gradient(180deg, #ffc933, #d79c00);
+  color: #2a2000;
+  border-color: transparent;
+  animation: uno-ready 1.1s ease-in-out infinite;
+}
 .act-catch { background: linear-gradient(180deg, #ff6b6b, #c93b3b); }
-.act-primary { background: linear-gradient(180deg, #2fbe6f, #1d8f4f); border-color: transparent; }
+.act-primary { background: linear-gradient(180deg, #35c67d, #1d8f4f); border-color: transparent; }
 
-/* ── Chat ────────────────────────────────────────────── */
+/* ── 8. Dock ─────────────────────────────────────────────────────────────── */
+.dock {
+  flex: none;
+  display: flex;
+  gap: 8px;
+  padding: 6px 12px calc(6px + var(--safe-b));
+  border-top: 1px solid var(--stroke-soft);
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.16), rgba(0, 0, 0, 0.34));
+  backdrop-filter: blur(10px);
+}
+
+.dock-btn {
+  flex: 1;
+  min-height: 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 6px 8px;
+  font: inherit;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--stroke-soft);
+  border-radius: 12px;
+  cursor: pointer;
+  touch-action: manipulation;
+  position: relative;
+  transition: background var(--t-fast) ease, color var(--t-fast) ease, border-color var(--t-fast) ease, transform var(--t-instant) ease;
+}
+.dock-btn:active { transform: scale(0.96); }
+.dock-icon { font-size: 1.15rem; line-height: 1; }
+.dock-label { font-size: 0.68rem; font-weight: 700; letter-spacing: 0.04em; }
+
+/* Voice states. Each one changes the icon, the label AND the border, so the
+   state never depends on colour alone. */
+.dock-btn.voice-btn.is-live {
+  color: var(--ink);
+  border-color: var(--green);
+  background: rgba(47, 184, 114, 0.18);
+}
+.dock-btn.voice-btn.is-muted {
+  color: #ffc182;
+  border-color: var(--yellow);
+  background: rgba(244, 163, 0, 0.16);
+}
+.dock-btn.voice-btn.is-connecting {
+  color: var(--yellow);
+  border-color: var(--yellow);
+}
+.dock-btn.voice-btn.is-connecting .dock-icon { animation: spin-slow 1.1s linear infinite; }
+.dock-btn.voice-btn.is-error {
+  color: #ff9d9d;
+  border-color: var(--red);
+  background: rgba(230, 57, 70, 0.14);
+}
+.dock-btn[aria-pressed='false'] { opacity: 0.6; }
+.dock-btn[aria-pressed='false'] .dock-icon { text-decoration: line-through; }
+
+/* Disconnect sits next to the mic and shares its shape, so it reads as part of
+   the same control rather than as a fourth unrelated action. */
+.dock-btn.voice-off-btn {
+  flex: 0 0 auto;
+  min-width: 62px;
+  color: #ff9d9d;
+  border-color: rgba(230, 57, 70, 0.4);
+  background: rgba(230, 57, 70, 0.12);
+}
+
+/* A live mic gets a subtle breathing glow — ambient, not attention-seeking. */
+.dock-btn.voice-btn.is-live::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 14px;
+  border: 2px solid rgba(47, 184, 114, 0.5);
+  animation: mic-breathe 2.4s ease-in-out infinite;
+  pointer-events: none;
+}
+
+/* ── 9. Chat ─────────────────────────────────────────────────────────────── */
 .chat {
   position: fixed;
   right: 14px;
-  bottom: 14px;
-  width: min(320px, calc(100vw - 28px));
-  max-height: min(460px, 70vh);
+  bottom: calc(var(--dock-h) + 18px + var(--safe-b));
+  width: min(340px, calc(100vw - 28px));
+  max-height: min(460px, 62vh);
   display: flex;
   flex-direction: column;
   gap: 8px;
   padding: 12px;
   border-radius: 16px;
-  background: #123029;
+  background: var(--panel-solid);
   border: 1px solid var(--stroke);
-  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--lift-3);
   z-index: 15;
 }
 .chat-head { display: flex; align-items: center; justify-content: space-between; }
@@ -383,6 +772,7 @@ input:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
   flex: 1;
   min-height: 90px;
   overflow-y: auto;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -398,66 +788,93 @@ input:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
   grid-template-columns: repeat(8, 1fr);
   gap: 2px;
   padding: 4px 0;
-  border-top: 1px solid var(--stroke);
-  border-bottom: 1px solid var(--stroke);
+  border-top: 1px solid var(--stroke-soft);
+  border-bottom: 1px solid var(--stroke-soft);
 }
 .sticker-btn {
   font-size: 1.2rem;
   background: none;
   border: none;
   cursor: pointer;
-  padding: 3px 0;
-  border-radius: 7px;
+  /* 40px cells: comfortably tappable without the tray becoming huge. */
+  min-height: 40px;
+  border-radius: 8px;
   line-height: 1;
-  transition: transform 0.1s ease, background 0.12s ease;
+  touch-action: manipulation;
+  transition: transform var(--t-fast) var(--ease-spring), background var(--t-fast) ease;
 }
-.sticker-btn:hover { background: rgba(255, 255, 255, 0.1); transform: scale(1.22); }
 #chatForm { display: flex; gap: 6px; }
-#chatForm input { padding: 9px 11px; font-size: 0.92rem; }
-.chat-send { width: auto; margin-top: 0; padding: 9px 14px; }
+#chatForm input { padding: 11px; font-size: 0.92rem; min-width: 0; }
+.chat-send { width: auto; margin-top: 0; padding: 11px 16px; min-height: 44px; }
 .chat-note { margin: 0; font-size: 0.68rem; color: var(--muted); line-height: 1.35; }
 
-/* ── Overlays ───────────────────────────────────────── */
+/* ── 10. Overlays ────────────────────────────────────────────────────────── */
 .overlay {
   position: fixed;
   inset: 0;
-  background: rgba(4, 14, 11, 0.78);
+  background: rgba(4, 14, 11, 0.8);
+  backdrop-filter: blur(3px);
   display: grid;
   place-items: center;
-  padding: 20px;
+  padding: calc(16px + var(--safe-t)) 16px calc(16px + var(--safe-b));
   z-index: 20;
+  overflow-y: auto;
 }
 .overlay-box {
   width: min(440px, 100%);
-  background: #14342b;
+  max-height: 100%;
+  overflow-y: auto;
+  background: var(--panel-solid);
   border: 1px solid var(--stroke);
   border-radius: 18px;
-  padding: 24px 22px;
+  padding: 24px 22px calc(24px + var(--safe-b));
   text-align: center;
+  box-shadow: var(--lift-3);
+  animation: overlay-in var(--t-base) var(--ease-out) backwards;
 }
-.overlay-box h3 { margin: 0 0 6px; font-size: 1.35rem; }
+.overlay-box h3 { margin: 0 0 8px; font-size: 1.35rem; }
 
 .color-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin: 18px 0 6px; }
 .swatch {
   aspect-ratio: 3 / 2;
+  min-height: 64px;
   border-radius: 12px;
   border: 2px solid rgba(255, 255, 255, 0.25);
   cursor: pointer;
   font-weight: 800;
-  color: rgba(0, 0, 0, 0.55);
-  font-size: 0.9rem;
+  color: rgba(0, 0, 0, 0.62);
+  font-size: 0.95rem;
+  font-family: inherit;
+  touch-action: manipulation;
+  transition: transform var(--t-fast) var(--ease-spring), filter var(--t-fast) ease;
 }
+.swatch:active { transform: scale(0.96); }
 .swatch.red { background: var(--red); }
 .swatch.yellow { background: var(--yellow); }
 .swatch.green { background: var(--green); color: #fff; }
 .swatch.blue { background: var(--blue); color: #fff; }
 
 .tally { width: 100%; border-collapse: collapse; margin: 16px 0 4px; font-size: 0.95rem; }
-.tally td { padding: 8px 4px; border-bottom: 1px solid var(--stroke); }
+.tally td { padding: 9px 4px; border-bottom: 1px solid var(--stroke-soft); text-align: left; }
 .tally td:last-child { text-align: right; font-weight: 800; font-variant-numeric: tabular-nums; }
 .tally tr:last-child td { border-bottom: none; }
+.tally tr.is-me td { color: var(--yellow); }
 
-/* ── Motion ──────────────────────────────────────────── */
+.voice-detail { margin: 14px 0; text-align: left; font-size: 0.82rem; color: var(--muted); }
+.voice-detail summary { cursor: pointer; padding: 6px 0; min-height: 36px; }
+.voice-detail pre {
+  margin: 8px 0 0;
+  padding: 10px;
+  background: rgba(0, 0, 0, 0.4);
+  border-radius: 8px;
+  font-size: 0.72rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+/* ── 11. Motion ──────────────────────────────────────────────────────────── */
 @keyframes deal-in {
   from { opacity: 0; transform: translateY(-26px) rotate(-8deg) scale(0.8); }
   to { opacity: 1; transform: none; }
@@ -474,69 +891,128 @@ input:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
 @keyframes bump {
   50% { transform: translateY(-9px) scale(1.05); }
 }
-@keyframes flash {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(244, 163, 0, 0); }
-  40% { box-shadow: 0 0 0 5px rgba(244, 163, 0, 0.34); }
+@keyframes overlay-in {
+  from { opacity: 0; transform: translateY(14px) scale(0.98); }
+  to { opacity: 1; transform: none; }
 }
 @keyframes pulse-turn {
   0%, 100% { box-shadow: 0 0 0 0 rgba(244, 163, 0, 0); }
   50% { box-shadow: 0 0 0 3px rgba(244, 163, 0, 0.22); }
+}
+@keyframes turn-ring {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(244, 163, 0, 0); }
+  50% { box-shadow: 0 0 0 6px rgba(244, 163, 0, 0.18); }
 }
 @keyframes pop-sticker {
   0% { transform: scale(0.3) rotate(-12deg); opacity: 0; }
   70% { transform: scale(1.15) rotate(3deg); }
   100% { transform: scale(1); opacity: 1; }
 }
-.card.deal-in { animation: deal-in 0.32s ease-out backwards; }
-.card.play-in { animation: play-in 0.34s cubic-bezier(0.3, 1.4, 0.5, 1) backwards; }
-.fan .card { animation: fan-in 0.26s ease-out backwards; }
-.pile.bump { animation: bump 0.24s ease; }
-.score.active-turn { animation: pulse-turn 1.9s ease-in-out infinite; }
-.sticker { display: inline-block; animation: pop-sticker 0.28s cubic-bezier(0.3, 1.5, 0.5, 1); }
-
-/* Stagger the deal so cards land one after another, not all at once. */
-.table.dealing .opponent:nth-child(1) .fan .card:nth-child(1) { animation-delay: 0.02s; }
-.table.dealing .opponent:nth-child(1) .fan .card:nth-child(2) { animation-delay: 0.07s; }
-.table.dealing .opponent:nth-child(1) .fan .card:nth-child(3) { animation-delay: 0.12s; }
-.table.dealing .opponent:nth-child(2) .fan .card:nth-child(1) { animation-delay: 0.05s; }
-.table.dealing .opponent:nth-child(2) .fan .card:nth-child(2) { animation-delay: 0.1s; }
-.table.dealing .opponent:nth-child(2) .fan .card:nth-child(3) { animation-delay: 0.15s; }
-.table.dealing .opponent:nth-child(3) .fan .card:nth-child(1) { animation-delay: 0.08s; }
-.table.dealing .opponent:nth-child(3) .fan .card:nth-child(2) { animation-delay: 0.13s; }
-.table.dealing .opponent:nth-child(3) .fan .card:nth-child(3) { animation-delay: 0.18s; }
-.hand .card:nth-child(1) { animation-delay: 0.02s; }
-.hand .card:nth-child(2) { animation-delay: 0.05s; }
-.hand .card:nth-child(3) { animation-delay: 0.08s; }
-.hand .card:nth-child(4) { animation-delay: 0.11s; }
-.hand .card:nth-child(5) { animation-delay: 0.14s; }
-.hand .card:nth-child(6) { animation-delay: 0.17s; }
-.hand .card:nth-child(7) { animation-delay: 0.2s; }
-.hand .card:nth-child(8) { animation-delay: 0.23s; }
-.hand .card:nth-child(9) { animation-delay: 0.26s; }
-
-@media (prefers-reduced-motion: reduce) {
-  .card.deal-in, .card.play-in, .fan .card, .pile.bump, .sticker { animation: none !important; }
-  .score.active-turn { animation: none; }
+@keyframes uno-ready {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(244, 163, 0, 0.5); }
+  50% { box-shadow: 0 0 0 6px rgba(244, 163, 0, 0); }
+}
+@keyframes warn-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+@keyframes speaking-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.22); }
+}
+@keyframes mic-breathe {
+  0%, 100% { opacity: 0.15; transform: scale(1); }
+  50% { opacity: 0.55; transform: scale(1.02); }
+}
+@keyframes spin-slow {
+  to { transform: rotate(360deg); }
+}
+@keyframes uno-flash {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.4) rotate(-12deg); }
+  30% { opacity: 1; transform: translate(-50%, -50%) scale(1.15) rotate(4deg); }
+  62% { transform: translate(-50%, -50%) scale(1) rotate(0deg); opacity: 1; }
+  100% { opacity: 0; transform: translate(-50%, -160%) scale(1.25); }
 }
 
-/* ── Status ─────────────────────────────────────────── */
+.uno-flash {
+  font: 900 clamp(2.4rem, 12vw, 4.2rem) / 1 inherit;
+  letter-spacing: 0.06em;
+  color: var(--yellow);
+  -webkit-text-stroke: 2px rgba(0, 0, 0, 0.45);
+  text-shadow: 0 0 26px rgba(244, 163, 0, 0.85), 0 6px 18px rgba(0, 0, 0, 0.6);
+  transform: translate(-50%, -50%);
+  animation: uno-flash 900ms var(--ease-out) forwards;
+  white-space: nowrap;
+}
+
+/* Re-trigger hook for the toast: app.js adds this class to replay the entry. */
+.toast.toast-pop { animation: toast-in var(--t-base) var(--ease-spring); }
+
+.overlay-box h3.is-win {
+  color: var(--yellow);
+  text-shadow: 0 0 22px rgba(244, 163, 0, 0.45);
+}
+
+.card.deal-in { animation: deal-in var(--t-slow) var(--ease-out) backwards; }
+
+.card.play-in { animation: play-in var(--t-slow) var(--ease-spring) backwards; }
+.fan .card { animation: fan-in var(--t-base) var(--ease-out) backwards; }
+.pile.bump { animation: bump var(--t-base) ease; }
+.score.active-turn { animation: pulse-turn 1.9s ease-in-out infinite; }
+.sticker { display: inline-block; animation: pop-sticker var(--t-base) var(--ease-spring); }
+.is-nope { animation: nope-bg 420ms ease; }
+
+@keyframes nope-bg {
+  0%, 100% { background-color: transparent; }
+  40% { background-color: rgba(230, 57, 70, 0.28); }
+}
+
+/* Stagger the deal so cards land one after another, not all at once. */
+.table.dealing .hand .card:nth-child(1) { animation-delay: 0.02s; }
+.table.dealing .hand .card:nth-child(2) { animation-delay: 0.05s; }
+.table.dealing .hand .card:nth-child(3) { animation-delay: 0.08s; }
+.table.dealing .hand .card:nth-child(4) { animation-delay: 0.11s; }
+.table.dealing .hand .card:nth-child(5) { animation-delay: 0.14s; }
+.table.dealing .hand .card:nth-child(6) { animation-delay: 0.17s; }
+.table.dealing .hand .card:nth-child(7) { animation-delay: 0.2s; }
+.table.dealing .hand .card:nth-child(8) { animation-delay: 0.23s; }
+.table.dealing .hand .card:nth-child(9) { animation-delay: 0.26s; }
+
+/* ── 12. Effects ─────────────────────────────────────────────────────────── */
+.fx {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none; /* must never eat a tap meant for the table */
+  z-index: 50;
+}
+
 .toast {
   position: fixed;
   left: 50%;
-  bottom: 24px;
+  bottom: calc(var(--dock-h) + 26px + var(--safe-b));
   transform: translateX(-50%);
-  background: #ff8f8f;
+  background: #ff9d9d;
   color: #2b0b0b;
   padding: 11px 18px;
   border-radius: 999px;
   font-weight: 700;
   z-index: 40;
-  max-width: 90vw;
+  max-width: min(90vw, 460px);
   text-align: center;
+  box-shadow: var(--lift-2);
+  animation: toast-in var(--t-base) var(--ease-spring) backwards;
 }
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translate(-50%, 14px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
 .conn {
   position: fixed;
-  top: 12px;
+  top: calc(10px + var(--safe-t));
   left: 50%;
   transform: translateX(-50%);
   background: var(--yellow);
@@ -546,15 +1022,281 @@ input:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
   font-weight: 700;
   font-size: 0.88rem;
   z-index: 40;
+  box-shadow: var(--lift-2);
 }
 
-@media (max-width: 560px) {
-  :root { --card-w: 66px; --card-h: 94px; }
-  .card.mini { width: 30px; height: 42px; }
-  .card.top { --card-w: 78px; --card-h: 109px; }
-  .pile-row { gap: 16px; }
+/* ── 13. Responsive ──────────────────────────────────────────────────────── */
+
+/* Hover rules, quarantined. See the note at the top of the file. */
+@media (hover: hover) and (pointer: fine) {
+  .card:not(.dim):hover { transform: translateY(-10px); }
+  .card.dim:hover { transform: none; }
+  .pile:not(:disabled):hover { transform: translateY(-4px); }
+  .btn:hover { background: rgba(255, 255, 255, 0.15); }
+  .swatch:hover { transform: translateY(-3px) scale(1.03); filter: brightness(1.08); }
+  .sticker-btn:hover { background: rgba(255, 255, 255, 0.1); transform: scale(1.22); }
+  .dock-btn:hover { background: rgba(255, 255, 255, 0.12); }
 }
 
+/* Desktop / laptop: the table gets a real left rail for opponents. */
+@media (min-width: 760px) {
+  :root { --card-w: 90px; --card-h: 126px; --card-top-w: 104px; --card-top-h: 146px; --hand-gap: 10px; }
+  .table { grid-template-columns: minmax(230px, 300px) 1fr; align-items: center; padding: 24px; gap: 20px; }
+  .opponents { flex-direction: column; flex-wrap: wrap; align-content: center; justify-content: flex-start; }
+  .opponent {
+    width: 100%;
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    /* Grid, not flex: name, meta and fan each get a track, so a long player
+       name or a big hand cannot squeeze the middle column into three lines. */
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: 'who meta' 'fan fan';
+    row-gap: 6px;
+  }
+  .opponent .fan { grid-area: fan; margin-left: 0; justify-content: flex-start; }
+  .opponent .who { grid-area: who; }
+  .opponent .meta { grid-area: meta; margin-left: 0; text-align: right; white-space: nowrap; }
+  .warn-uno { grid-column: 1 / -1; }
+
+  .hand { flex-wrap: wrap; }
+  .dock { justify-content: flex-end; }
+  .dock-btn { flex: 0 0 auto; min-width: 92px; }
+  .chat { right: 18px; }
+}
+
+/* Tablet: still a two-column table, but cards shrink a little. */
+@media (min-width: 640px) and (max-width: 899px) {
+  :root { --card-w: 78px; --card-h: 110px; --card-top-w: 90px; --card-top-h: 126px; }
+  .table { grid-template-columns: minmax(170px, 220px) 1fr; }
+}
+
+/* ── Portrait phone ──────────────────────────────────────────────────────── */
+@media (max-width: 620px) {
+  :root {
+    --card-w: 62px;
+    --card-h: 88px;
+    --card-top-w: 74px;
+    --card-top-h: 104px;
+    --card-mini-w: 26px;
+    --card-mini-h: 36px;
+    --hand-gap: 7px;
+    --dock-h: 56px;
+  }
+
+  .screen { padding: calc(14px + var(--safe-t)) 14px calc(14px + var(--safe-b)); }
+  .home-card { padding: 24px 18px; }
+  .share-row { flex-direction: column; }
+  .share-row .btn { width: 100%; }
+
+  .bar { padding: calc(6px + var(--safe-t)) 10px 6px; }
+  .score { padding: 5px 9px; font-size: 0.8rem; }
+  .score .sep, .score .cards { display: none; } /* name + points is enough here */
+  .chip { padding: 6px 8px; font-size: 0.7rem; }
+
+  .table {
+    width: calc(100% - 16px);
+    padding: 12px 10px;
+    margin: 8px auto;
+    gap: 10px;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* Opponents become a horizontal strip: one row, scrollable, so the centre
+     of the table is never pushed off-screen by a six-player table. */
+  .opponents {
+    flex-direction: row;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    gap: 8px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    padding-bottom: 2px;
+    -webkit-overflow-scrolling: touch;
+  }
+  .opponents::-webkit-scrollbar { display: none; }
+  .opponent { flex: 0 0 auto; padding: 7px 9px; gap: 3px; }
+  .opponent .who { font-size: 0.82rem; }
+  .opponent .meta { font-size: 0.68rem; }
+  .opponent .fan { margin-left: calc(var(--card-mini-w) * -0.3); }
+
+  .pile-row { gap: 18px; }
+
+  /* The hand scrolls sideways instead of wrapping. Wrapping on a narrow screen
+     eats the entire viewport in cards; a single scrollable row keeps the
+     table, the piles and the dock all visible at once. */
+  .hand {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x proximity;
+    justify-content: flex-start;
+    padding: 18px 4px 6px;
+    scrollbar-width: none;
+    /* Fades at the edges so it is obvious there is more to scroll to. */
+    mask-image: linear-gradient(90deg, transparent, #000 12px, #000 calc(100% - 12px), transparent);
+  }
+  .hand::-webkit-scrollbar { display: none; }
+  .hand .card { scroll-snap-align: center; flex: none; }
+  .hand .card.is-selected { transform: translateY(-12px); }
+
+  .actions { gap: 8px; }
+  .actions .btn { flex: 1 1 auto; min-width: 44%; padding: 12px 10px; font-size: 0.9rem; }
+
+  .chat {
+    right: 8px;
+    left: 8px;
+    width: auto;
+    max-height: 56vh;
+    bottom: calc(var(--dock-h) + 12px + var(--safe-b));
+  }
+
+  .dock-btn { min-height: 50px; }
+  .dock-label { font-size: 0.62rem; }
+  .sticker-tray { grid-template-columns: repeat(6, 1fr); }
+}
+
+/* ── Landscape phone ─────────────────────────────────────────────────────── */
+@media (orientation: landscape) and (max-height: 560px) {
+  :root {
+    --card-w: 50px;
+    --card-h: 70px;
+    --card-top-w: 60px;
+    --card-top-h: 84px;
+    --card-mini-w: 20px;
+    --card-mini-h: 28px;
+    --hand-gap: 6px;
+    --dock-h: 46px;
+  }
+
+  .bar { padding: calc(4px + var(--safe-t)) 10px 4px; }
+  .score { padding: 4px 8px; font-size: 0.74rem; }
+
+  /* Height is the scarce axis here, so the table stops being a vertical stack
+     and becomes a single row: opponents on the left, piles and turn banner
+     beside them. Stacked, it needed ~172px and only ~150px was available — and
+     because the table clips its overflow, the surplus was cut off at both
+     ends rather than scrolled. One row needs ~90px and always fits.
+     A two-column grid is also a trap here: at 844px wide the desktop
+     `min-width: 760px` rules apply and try to turn the opponent list into a
+     full-width vertical rail. This row layout overrides them outright. */
+  .table {
+    width: calc(100% - 16px);
+    /* 12px, not 8: the cards' drop-shadow filter extends ~10px past their box
+       and overflow:hidden on the table slices that shadow off at the edge. */
+    padding: 12px 12px;
+    margin: 5px auto;
+    gap: 10px;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    grid-template-columns: none;
+  }
+
+  /* Opponents: a compact horizontal strip, scrollable, one short row. */
+  .opponents {
+    flex: 1 1 auto;
+    min-width: 0;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    align-items: center;
+    gap: 6px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .opponents::-webkit-scrollbar { display: none; }
+  .opponent {
+    width: auto;
+    flex: 0 0 auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 8px;
+    border-radius: 10px;
+    display: flex;
+  }
+  .opponent .who { font-size: 0.76rem; }
+  .opponent .meta { font-size: 0.68rem; }
+  .opponent .fan { margin-left: calc(var(--card-mini-w) * -0.3); }
+  .warn-uno { font-size: 0.66rem; }
+
+  .centre { flex-direction: row; align-items: center; gap: 14px; flex: none; }
+  .pile-row { gap: 12px; }
+  .slot-label { display: none; } /* the pile is self-evident at this size */
+  .turn-banner { font-size: 0.8rem; min-height: 1.1em; text-align: left; max-width: 130px; }
+  .top-card-slot { padding-top: 0; }
+  .pile-name { display: none; }
+
+
+  .hand-area { padding: 2px 10px 4px; gap: 4px; }
+  .log-strip { font-size: 0.74rem; min-height: 1.1em; }
+  .hand {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    padding: 12px 4px 2px;
+    min-height: calc(var(--card-h) + 12px);
+  }
+  .hand::-webkit-scrollbar { display: none; }
+  .hand .card.is-selected { transform: translateY(-8px); }
+
+  .actions { min-height: 42px; gap: 8px; }
+  .actions .btn { min-height: 42px; padding: 9px 14px; font-size: 0.85rem; }
+
+  .dock { padding: 4px 10px calc(4px + var(--safe-b)); }
+  .dock-btn {
+    flex-direction: row;
+    gap: 7px;
+    min-height: 40px;
+    padding: 4px 10px;
+    flex: 0 1 auto;
+  }
+  .dock-icon { font-size: 0.98rem; }
+  .dock-label { font-size: 0.7rem; }
+  .dock-btn.voice-btn.is-live::before { display: none; }
+
+  .chat { max-height: 76vh; bottom: calc(var(--dock-h) + 8px + var(--safe-b)); }
+  .overlay-box { padding: 14px 16px; }
+  .overlay-box h3 { font-size: 1.05rem; margin-bottom: 4px; }
+  .overlay-box p { margin: 6px 0; font-size: 0.86rem; }
+  .color-grid { gap: 8px; margin: 10px 0 4px; }
+  .swatch { min-height: 48px; }
+  .tally { margin: 8px 0 2px; font-size: 0.86rem; }
+  .tally td { padding: 5px 4px; }
+  .overlay-box .btn { min-height: 42px; margin-top: 8px; padding: 10px 14px; }
+}
+
+
+/* Short and wide but not a phone (a small laptop window): trim, don't rearrange. */
+@media (min-width: 760px) and (max-height: 620px) {
+  .table { min-height: 0; padding: 14px; margin: 8px auto; }
+  .hand { padding-top: 14px; min-height: calc(var(--card-h) + 14px); }
+}
+
+/* ── Reduced motion ──────────────────────────────────────────────────────── */
+/* Feedback is preserved; only the movement is taken away. A card still appears,
+   a turn still highlights, a toast still shows — they simply arrive at once. */
 @media (prefers-reduced-motion: reduce) {
-  * { transition: none !important; }
+  *,
+  *::before,
+  *::after {
+    transition-duration: 1ms !important;
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+  .card.deal-in, .card.play-in, .fan .card, .pile.bump, .sticker { animation: none !important; }
+  .card:hover, .card.is-selected { transform: none !important; }
+  .score.active-turn, .table.my-turn .top-card-slot::after,
+  .act-uno, .warn-uno, .dock-btn.voice-btn.is-live::before,
+  .opponent.is-speaking .mic { animation: none !important; }
+  .dock-btn.voice-btn.is-connecting .dock-icon { animation: none !important; }
+  .uno-flash { animation: none !important; opacity: 1; transform: translate(-50%, -50%); }
+  /* Without the lift, selection still has to be obvious — keep the ring. */
+  .card.is-selected { filter: drop-shadow(0 0 8px rgba(244, 163, 0, 0.7)); }
 }
