@@ -1,14 +1,28 @@
 /**
- * HTTP + WebSocket entry point.
+ * HTTP(S) + WebSocket entry point.
  *
  * Serves the client from ./public and speaks the game protocol on /ws.
  * Every rule decision happens on this side; the browser only sends intents.
+ *
+ * ── TLS ─────────────────────────────────────────────────────────────────────
+ *
+ * Voice chat needs a *secure context*, and browsers only treat https:// origins
+ * as one (plus http://localhost). Serving the game from a phone via
+ * http://192.168.x.x:3000 therefore has no `navigator.mediaDevices` at all and
+ * the microphone is unreachable — not a phone quirk, a transport one.
+ *
+ * So the server can speak TLS. Drop a certificate and key in ./certs (or point
+ * TLS_CERT/TLS_KEY at them) and it switches to https automatically; the
+ * WebSocket upgrade rides along as wss. With no certificate it stays plain http,
+ * which is still fine for playing — only voice needs the upgrade.
  */
 
 import http from 'node:http';
+import https from 'node:https';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 import { WebSocketServer } from 'ws';
@@ -32,7 +46,54 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const PORT = Number(process.env.PORT) || 3000;
+const HOST = process.env.HOST || '0.0.0.0';
 const MAX_MESSAGE_BYTES = 8 * 1024;
+
+/**
+ * Finds a usable certificate/key pair, if one has been provided.
+ * Explicit env vars win; otherwise ./certs/cert.pem + ./certs/key.pem is picked
+ * up automatically so `npm start` does the right thing with no extra flags.
+ */
+function findTls() {
+  const cert = process.env.TLS_CERT;
+  const key = process.env.TLS_KEY;
+  const certPath = cert || path.join(__dirname, '..', 'certs', 'cert.pem');
+  const keyPath = key || path.join(__dirname, '..', 'certs', 'key.pem');
+
+  const hasCert = cert ? fs.existsSync(cert) : fs.existsSync(certPath);
+  const hasKey = key ? fs.existsSync(key) : fs.existsSync(keyPath);
+
+  if (hasCert && hasKey) {
+    return { cert: fs.readFileSync(cert || certPath), key: fs.readFileSync(key || keyPath) };
+  }
+  // Half a configuration is a mistake worth shouting about rather than silently
+  // falling back to http and leaving voice mysteriously broken.
+  if (hasCert !== hasKey) {
+    console.warn(
+      `[tls] found only ${hasCert ? 'a certificate' : 'a key'} — ignoring TLS and serving plain http. ` +
+        'Voice chat needs both. See README "Voice chat over a LAN".',
+    );
+  }
+  return null;
+}
+
+const TLS = findTls();
+
+/**
+ * Optional TURN relay for voice, handed to each client when it joins.
+ *
+ * STUN alone connects most home networks, but two players behind symmetric NAT
+ * or restrictive mobile carriers will never find a direct path — that is what
+ * TURN is for. It is opt-in via environment so no credential is ever committed,
+ * and the client only uses it if all three parts are present.
+ */
+function turnConfig() {
+  const urls = process.env.TURN_URL;
+  const username = process.env.TURN_USERNAME;
+  const credential = process.env.TURN_CREDENTIAL;
+  if (!urls || !username || !credential) return null;
+  return { urls, username, credential };
+}
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -45,7 +106,16 @@ const MIME = {
   '.webmanifest': 'application/manifest+json',
 };
 
-const server = http.createServer(async (req, res) => {
+const server = (TLS ? https.createServer(TLS, handler) : http.createServer(handler));
+
+function handler(req, res) {
+  handleRequest(req, res).catch((err) => {
+    if (!res.headersSent) res.writeHead(500).end('server error');
+    console.error('http error', err);
+  });
+}
+
+async function handleRequest(req, res) {
   try {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
 
@@ -95,10 +165,10 @@ const server = http.createServer(async (req, res) => {
     });
     fs.createReadStream(file).pipe(res);
   } catch (err) {
-    res.writeHead(500).end('server error');
+    if (!res.headersSent) res.writeHead(500).end('server error');
     console.error('http error', err);
   }
-});
+}
 
 const wss = new WebSocketServer({
   server,
@@ -251,6 +321,7 @@ function handleJoin(socket, msg) {
     you: seat.id,
     token: seat.token,
     rejoined,
+    turn: turnConfig(),
     view: viewForSeat(room, seat, { full: rejoined }), // full hand resync on reconnect
   });
   broadcastRoom(room);
@@ -345,10 +416,59 @@ wss.on('close', () => {
   clearInterval(sweeper);
 });
 
-server.listen(PORT, () => {
-  console.log(`UNO server on http://localhost:${PORT}`);
-  console.log(`Players per table: ${MIN_SEATS}-${MAX_SEATS}`);
+/** Addresses worth showing a human: never 0.0.0.0, which is not dialable. */
+function shareableUrls() {
+  const scheme = TLS ? 'https' : 'http';
+  const addrs = [];
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const ni of list || []) {
+      if (ni.family !== 'IPv4' || ni.internal) continue;
+      addrs.push(`${scheme}://${ni.address}:${PORT}`);
+    }
+  }
+  if (HOST !== '0.0.0.0' && HOST !== '::') addrs.unshift(`${scheme}://${HOST}:${PORT}`);
+  else addrs.unshift(`${scheme}://localhost:${PORT}`);
+  return [...new Set(addrs)];
+}
+
+server.listen(PORT, HOST, () => {
+  console.log(`UNO server listening on ${HOST}:${PORT} — players per table: ${MIN_SEATS}-${MAX_SEATS}`);
+  for (const url of shareableUrls()) console.log(`  ${url}`);
+  if (TLS) {
+    console.log('  TLS on. Voice chat is available on these addresses.');
+  } else {
+    console.log('  Plain http. Playing works; voice chat needs https (see README).');
+  }
 });
+
+// A busy port is an ordinary situation — usually a second copy already running —
+// so say what happened in a sentence a human can act on instead of dumping an
+// unhandled 'error' event and a stack.
+//
+// The handler has to be on the WebSocketServer as well as the http/https
+// server: `ws` re-emits the underlying server's error on itself, and whichever
+// listener is attached first is the one that sees it. Without both, this throws
+// an unhandled 'error' and prints the raw stack — which is exactly the
+// behaviour this is meant to replace.
+let reportedFatal = false;
+function reportFatal(err) {
+  if (reportedFatal) return;
+  reportedFatal = true;
+  if (err && err.code === 'EADDRINUSE') {
+    console.error(
+      `\nPort ${PORT} is already in use — another copy of the UNO server is probably still running.\n` +
+        `  find it:  lsof -ti tcp:${PORT}\n` +
+        `  stop it:  kill $(lsof -ti tcp:${PORT})\n` +
+        `  or use another port:  PORT=${PORT + 1} npm start\n`,
+    );
+  } else {
+    console.error('server error', err);
+  }
+  process.exit(1);
+}
+
+server.on('error', reportFatal);
+wss.on('error', reportFatal);
 
 process.on('SIGINT', () => server.close(() => process.exit(0)));
 process.on('SIGTERM', () => server.close(() => process.exit(0)));

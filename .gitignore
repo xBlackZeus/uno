@@ -3,3 +3,8 @@ node_modules/
 .env.local
 *.log
 .DS_Store
+
+# TLS material for voice chat. Never commit a private key or a certificate.
+certs/
+*.pem
+*.key

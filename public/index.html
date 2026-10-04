@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>UNO — play your friends</title>
 <meta name="description" content="Play UNO online with up to six friends. Create a game, send the link, chat and talk while you play." />
+<meta name="theme-color" content="#0a241d" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='11' cy='11' r='8' fill='%23e63946'/><circle cx='21' cy='21' r='8' fill='%232f6fd0'/></svg>" />
 <link rel="stylesheet" href="style.css" />
 </head>
@@ -72,23 +75,20 @@
     <div class="scores" id="scores"></div>
     <div class="bar-right">
       <span class="chip" id="roundChip">Round 1</span>
-      <button id="voiceBtn" class="chip chip-btn" type="button" title="Voice uses data — off by default">
-        <span id="voiceIcon">🎙</span><span id="voiceLabel">Voice</span>
-      </button>
       <span class="chip" id="codeChip" title="Game code"></span>
       <button id="copyLinkBtn" class="linkish" type="button">Invite</button>
-      <button id="chatToggle" class="linkish" type="button">Chat</button>
     </div>
   </header>
 
   <div class="play-area">
     <section class="table" id="table">
-      <div class="opponents" id="opponents"></div>
+      <div class="opponents" id="opponents" aria-label="Other players"></div>
       <div class="centre">
         <div class="pile-row">
           <button id="drawPile" class="pile draw-pile" type="button" aria-label="Draw a card">
             <span class="pile-back" id="drawPileArt"></span>
             <span class="pile-count" id="drawCount"></span>
+            <span class="pile-name">Draw</span>
           </button>
           <div class="top-card-slot">
             <div id="topCard" class="card top"></div>
@@ -101,10 +101,41 @@
 
     <section class="hand-area">
       <div id="logStrip" class="log-strip"></div>
-      <div id="hand" class="hand"></div>
+      <div id="hand" class="hand" role="group" aria-label="Your cards"></div>
       <div class="actions" id="actions"></div>
     </section>
   </div>
+
+  <!-- Dock: the controls a thumb can actually reach on a phone. -->
+  <nav class="dock" aria-label="Game controls">
+    <button id="voiceBtn" class="dock-btn voice-btn" type="button"
+            aria-live="off" aria-describedby="voiceStatus">
+      <span id="voiceIcon" class="dock-icon" aria-hidden="true">🎙</span>
+      <span class="dock-label" id="voiceLabel">Voice</span>
+    </button>
+
+    <!-- Separate from the mic button on purpose: tapping the mic toggles mute,
+         which is the frequent action, and overloading one button with
+         off → live → muted → off makes the state unreadable. Disconnecting
+         releases the microphone, so it gets its own explicit control. -->
+    <button id="voiceOff" class="dock-btn voice-off-btn hidden" type="button"
+            aria-label="Turn off voice and release the microphone">
+      <span class="dock-icon" aria-hidden="true">✕</span>
+      <span class="dock-label">End</span>
+    </button>
+
+    <span id="voiceStatus" class="sr-only" role="status"></span>
+
+    <button id="soundBtn" class="dock-btn" type="button" aria-pressed="true">
+      <span class="dock-icon" id="soundIcon" aria-hidden="true">🔊</span>
+      <span class="dock-label" id="soundLabel">Sound</span>
+    </button>
+
+    <button id="chatToggle" class="dock-btn" type="button">
+      <span class="dock-icon" aria-hidden="true">💬</span>
+      <span class="dock-label">Chat</span>
+    </button>
+  </nav>
 
   <!-- Chat -->
   <aside id="chatPanel" class="chat hidden" aria-label="Chat">
@@ -122,15 +153,15 @@
   </aside>
 
   <!-- Overlays -->
-  <div id="colorPicker" class="overlay hidden">
+  <div id="colorPicker" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="colorTitle">
     <div class="overlay-box">
-      <h3>Pick a colour</h3>
+      <h3 id="colorTitle">Pick a colour</h3>
       <div class="color-grid" id="colorGrid"></div>
       <button class="btn subtle" data-close="colorPicker" type="button">Cancel</button>
     </div>
   </div>
 
-  <div id="roundBanner" class="overlay hidden">
+  <div id="roundBanner" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="roundTitle">
     <div class="overlay-box">
       <h3 id="roundTitle">Round over</h3>
       <p id="roundBody"></p>
@@ -140,9 +171,9 @@
     </div>
   </div>
 
-  <div id="linkBanner" class="overlay hidden">
+  <div id="linkBanner" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="linkTitle">
     <div class="overlay-box">
-      <h3>Invite players</h3>
+      <h3 id="linkTitle">Invite players</h3>
       <p class="muted">Anyone with this link can take a free seat.</p>
       <div class="share-row">
         <input id="shareLink2" readonly aria-label="Invite link" />
@@ -152,9 +183,9 @@
     </div>
   </div>
 
-  <div id="voiceBanner" class="overlay hidden">
+  <div id="voiceBanner" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="voiceTitle">
     <div class="overlay-box">
-      <h3>Turn on voice?</h3>
+      <h3 id="voiceTitle">Turn on voice?</h3>
       <p>Voice talks directly to the other players, not through the server. It is the only part of this
          app that uses real bandwidth — roughly 24 kbps per player while you are talking.</p>
       <p class="muted">Nobody can hear you until you allow the microphone. Turn it off any time.</p>
@@ -162,6 +193,22 @@
       <button class="btn subtle" data-close="voiceBanner" type="button">Not now</button>
     </div>
   </div>
+
+  <!-- Voice diagnostics: shown only when voice genuinely cannot start, and it
+       says exactly which of the reasons applies instead of "unsupported". -->
+  <div id="voiceHelp" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="voiceHelpTitle">
+    <div class="overlay-box">
+      <h3 id="voiceHelpTitle">Voice needs a secure connection</h3>
+      <p id="voiceHelpBody"></p>
+      <details class="voice-detail">
+        <summary>Technical detail</summary>
+        <pre id="voiceHelpTech"></pre>
+      </details>
+      <button id="voiceHelpOk" class="btn primary" type="button">Got it</button>
+    </div>
+  </div>
+
+  <canvas id="fx" class="fx" aria-hidden="true"></canvas>
 </main>
 
 <div id="toast" class="toast hidden" role="status"></div>
@@ -170,6 +217,9 @@
 <script src="config.js"></script>
 <script src="cards.js"></script>
 <script src="stickers.js"></script>
+<script src="motion.js"></script>
+<script src="sfx.js"></script>
+<script src="particles.js"></script>
 <script src="voice.js"></script>
 <script src="app.js"></script>
 </body>
