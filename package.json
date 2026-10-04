@@ -1,16 +1,16 @@
 {
   "name": "uno-online",
   "version": "1.0.0",
-  "description": "Play UNO with a friend online. Full rules, room-link invites, endless rounds.",
+  "description": "Play UNO with friends online. 2-6 players, one link, peer-to-peer voice, no accounts.",
   "type": "module",
   "main": "server/index.js",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
-    "test": "node --test \"test/**/*.test.js\"",
+    "test": "node --test test/*.test.js",
     "test:e2e": "node --test test/e2e.test.js",
     "test:engine": "node --test test/game.test.js"
   },

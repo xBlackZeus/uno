@@ -7,7 +7,7 @@
 No accounts. No build step. One Node process and a dependency you already have.
 
 [![tests](https://img.shields.io/badge/tests-88%20passing-2fb872?style=flat-square&logo=node.js)](https://github.com/xBlackZeus/uno/actions)
-[![node](https://img.shields.io/badge/node-%E2%89%A520-5fa04e?style=flat-square&logo=node.js)](https://nodejs.org)
+[![node](https://img.shields.io/badge/node-%E2%89%A522-5fa04e?style=flat-square&logo=node.js)](https://nodejs.org)
 [![license](https://img.shields.io/badge/license-MIT-8b949e?style=flat-square)](LICENSE)
 [![deps](https://img.shields.io/badge/runtime%20deps-1-8b949e?style=flat-square)](package.json)
 
