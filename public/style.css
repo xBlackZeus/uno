@@ -374,12 +374,19 @@ input::placeholder { color: #6f8680; }
 .play-area {
   display: flex;
   flex-direction: column;
+  /* The table hugs its content and is centred in the space that is left, rather
+     than being stretched to fill a tall window and leaving dead space under the
+     piles. */
+  justify-content: center;
   flex: 1;
   min-height: 0; /* without this the children refuse to shrink and the dock is pushed off */
+  min-width: 0;
 }
 
 .table {
-  flex: 1 1 auto;
+  /* 0 1 auto: sized by its content, still allowed to shrink when the viewport
+     is short. See .play-area above. */
+  flex: 0 1 auto;
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr);

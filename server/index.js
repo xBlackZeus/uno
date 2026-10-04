@@ -55,6 +55,11 @@ const MAX_MESSAGE_BYTES = 8 * 1024;
  * up automatically so `npm start` does the right thing with no extra flags.
  */
 function findTls() {
+  // Explicit opt-out. Serving over TLS because a file happens to exist is a
+  // surprise waiting to happen: drop a cert in ./certs for one afternoon and
+  // every saved bookmark silently stops working. TLS=off pins plain HTTP.
+  if (process.env.TLS === 'off') return null;
+
   const cert = process.env.TLS_CERT;
   const key = process.env.TLS_KEY;
   const certPath = cert || path.join(__dirname, '..', 'certs', 'cert.pem');

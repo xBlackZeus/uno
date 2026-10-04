@@ -147,6 +147,10 @@ let base;
 
 test.before(async () => {
   process.env.PORT = String(PORT);
+  // Pin plain HTTP. The server turns itself into an HTTPS server when it finds
+  // ./certs, and these tests assert HTTP behaviour — without this the whole
+  // suite broke the moment anyone created a certificate for local voice chat.
+  process.env.TLS = 'off';
   const mod = await import('../server/index.js');
   base = `http://127.0.0.1:${PORT}`;
   await new Promise((resolve) => setTimeout(resolve, 150));
